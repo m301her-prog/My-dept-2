@@ -9,13 +9,13 @@
 
 import { CapacitorHttp } from '@capacitor/core';
 
-// Cloud API URLs for Neon database sync (Updated with requested domain)
+// Cloud API URLs for Neon database sync updated with https://my-dept-2.vercel.app/
 const CLOUD_API = {
   registerUser: 'https://my-dept-2.vercel.app/api/register-user',
-  loginUser: 'https://my-dept-2.vercel.app/api/register-user',
-  saveData: 'https://my-dept-2.vercel.app/api/register-user',
-  getData: 'https://my-dept-2.vercel.app/api/register-user',
-  deleteData: 'https://my-dept-2.vercel.app/api/register-user'
+  loginUser: 'https://my-dept-2.vercel.app/api/login-user',
+  saveData: 'https://my-dept-2.vercel.app/save',
+  getData: 'https://my-dept-2.vercel.app/get',
+  deleteData: 'https://my-dept-2.vercel.app/api/Delete'
 };
 
 // Neon database connection string - set in .env as VITE_NEON_DATABASE_URL
@@ -637,7 +637,7 @@ export const updateDebtStatus = async (userId, debtId, updates) => {
 
 /**
  * Direct Cloud API Delete Handler
- * Invokes https://my-dept-2.vercel.app/api/register-user
+ * Invokes https://my-dept-2.vercel.app/api/Delete
  */
 export const deleteDataFromCloud = async (id, companyName = '', userId = '') => {
   try {
@@ -687,7 +687,7 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
     console.warn('LocalStorage global cleanup warning:', err.message);
   }
 
-  // 2. Direct Delete API request (my-dept-2.vercel.app/api/register-user)
+  // 2. Direct Delete API request (https://my-dept-2.vercel.app/api/Delete)
   const cloudDeleteResult = await deleteDataFromCloud(debtId, companyName, targetUserId);
 
   // 3. Delete request through saveData fallback endpoint
@@ -820,7 +820,7 @@ export const generateDebtReport = (userId, language = 'ar') => {
   const h = headers[language] || headers.ar;
 
   let report = `═══════════════════════════════════════════════════════════════\n`;
-  report += `                        ${h.title}\n`;
+  report += `                                     ${h.title}\n`;
   report += `═══════════════════════════════════════════════════════════════\n\n`;
   report += `${h.date}: ${formatDate(new Date().toISOString())}\n`;
   report += `${h.user}: ${user?.name || user?.email || 'Unknown'}\n\n`;
@@ -857,7 +857,7 @@ export const generateDebtReport = (userId, language = 'ar') => {
   }
 
   report += `═══════════════════════════════════════════════════════════════\n`;
-  report += `               Debts Manager - ${new Date().getFullYear()}\n`;
+  report += `                Debts Manager - ${new Date().getFullYear()}\n`;
   report += `═══════════════════════════════════════════════════════════════\n`;
 
   return report;
@@ -1025,40 +1025,4 @@ export const deleteUser = (userId) => {
   }).catch(err => console.warn('Failed to sync user deletion:', err.message));
 
   triggerAndroidCapture('USER_DELETED', { userId });
-};
-
-/**
- * ============================================
- * STATISTICS CALCULATION
- * ============================================
- */
-
-export const calculateStatistics = (userId) => {
-  const debts = fetchDebts(userId);
-  const now = new Date();
-
-  const totalOwedToMe = debts
-    .filter(d => d.type === 'owed_to_me' && d.status !== 'paid')
-    .reduce((sum, d) => sum + (d.amount - (d.paidAmount || 0)), 0);
-
-  const totalIOwe = debts
-    .filter(d => d.type === 'i_owe' && d.status !== 'paid')
-    .reduce((sum, d) => sum + (d.amount - (d.paidAmount || 0)), 0);
-
-  const paidDebtsCount = debts.filter(d => d.status === 'paid').length;
-  const pendingDebtsCount = debts.filter(d => d.status === 'pending').length;
-
-  const overdueDebts = debts.filter(d => {
-    if (d.status === 'paid' || !d.dueDate) return false;
-    return new Date(d.dueDate) < now;
-  });
-
-  return {
-    totalDebtsCount: debts.length,
-    totalOwedToMe,
-    totalIOwe,
-    paidDebtsCount,
-    pendingDebtsCount,
-    overdueDebts
-  };
 };
