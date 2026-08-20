@@ -727,6 +727,53 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
 
 /**
  * ============================================
+ * STATISTICS AND ANALYTICS
+ * ============================================
+ */
+
+export const calculateStatistics = (userId) => {
+  const userDebtsKey = `user_${userId}_debts`;
+  const debts = loadFromLocalStorage(userDebtsKey, []);
+  const today = new Date().toISOString().split('T')[0];
+
+  let totalOwedToMe = 0;
+  let totalIOwe = 0;
+  let paidDebtsCount = 0;
+  let pendingDebtsCount = 0;
+  const overdueDebts = [];
+
+  debts.forEach(debt => {
+    const remainingAmount = debt.amount - (debt.paidAmount || 0);
+
+    if (debt.status === 'paid') {
+      paidDebtsCount++;
+    } else {
+      pendingDebtsCount++;
+
+      if (debt.type === 'owed_to_me') {
+        totalOwedToMe += remainingAmount;
+      } else if (debt.type === 'i_owe') {
+        totalIOwe += remainingAmount;
+      }
+
+      if (debt.dueDate && debt.dueDate < today) {
+        overdueDebts.push(debt);
+      }
+    }
+  });
+
+  return {
+    totalOwedToMe,
+    totalIOwe,
+    paidDebtsCount,
+    pendingDebtsCount,
+    overdueDebts,
+    totalDebtsCount: debts.length
+  };
+};
+
+/**
+ * ============================================
  * REPORTS AND EXPORT FUNCTIONS
  * ============================================
  */
