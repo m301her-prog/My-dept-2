@@ -329,6 +329,45 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
 
 /**
  * ============================================
+ * CALCULATIONS & STATISTICS FUNCTIONS
+ * ============================================
+ */
+
+export const calculateStatistics = (debts = []) => {
+  let totalOwed = 0;  // أموال لك عند الآخرين (دين لنا / له)
+  let totalOwing = 0; // أموال عليك للآخرين (دين علينا)
+  let paidCount = 0;
+  let pendingCount = 0;
+
+  debts.forEach(debt => {
+    const amount = parseFloat(debt.amount) || 0;
+    const paid = parseFloat(debt.paidAmount) || 0;
+    const remaining = amount - paid;
+
+    if (debt.type === 'lent' || debt.type === 'given' || debt.type === 'le_client') {
+      totalOwed += remaining;
+    } else {
+      totalOwing += remaining;
+    }
+
+    if (debt.status === 'paid') {
+      paidCount++;
+    } else {
+      pendingCount++;
+    }
+  });
+
+  return {
+    totalDebts: debts.length,
+    totalOwed,
+    totalOwing,
+    paidCount,
+    pendingCount
+  };
+};
+
+/**
+ * ============================================
  * REPORTS AND EXPORT FUNCTIONS
  * ============================================
  */
@@ -441,6 +480,7 @@ export default {
   addDebt,
   updateDebtStatus,
   deleteDebt,
+  calculateStatistics,
   downloadReport,
   logUserActivity,
   getUserActivities,
