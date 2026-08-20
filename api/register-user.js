@@ -1,22 +1,36 @@
 import pg from 'pg';
 
+// استخدام Pool بدلاً من Client لتسريع الاتصال ومنع تجاوز الاتصالات في Serverless
+const { Pool } = pg;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
 export default async function handler(req, res) {
+  // 1. إضافة هيدرز CORS كاملة لمنع حظر الطلب من المتصفح
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+  );
+
+  // 2. الرد الفوري على طلبات OPTIONS التمهيدية (حل مشكلة Failed to fetch الأساسية)
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const baseConnectionString = process.env.DATABASE_URL;
-  if (!baseConnectionString) {
+  if (!process.env.DATABASE_URL) {
     return res.status(500).json({ error: 'DATABASE_URL غير معرف في متغيرات البيئة' });
   }
 
-  const separator = baseConnectionString.includes('?') ? '&' : '?';
-  const finalConnectionString = `${baseConnectionString}${separator}sslmode=verify-full`;
-
-  const client = new pg.Client({
-    connectionString: finalConnectionString,
-    ssl: { rejectUnauthorized: false }
-  });
+  const client = await pool.connect();
 
   try {
     let body = req.body;
@@ -39,9 +53,7 @@ export default async function handler(req, res) {
 
     const cleanEmail = email.toLowerCase().trim();
 
-    await client.connect();
-
-    // بداية المعاملة (Transaction) لضمان تنفيذ كل الخطوات
+    // بداية المعاملة (Transaction)
     await client.query('BEGIN');
 
     // 1. إنشاء جدول الحسابات الرئيسي إن لم يكن موجوداً
@@ -72,14 +84,8 @@ export default async function handler(req, res) {
 
     const userId = 'usr_' + Math.random().toString(36).substring(2, 11);
 
-    // =========================================================
-    // تحديد صلاحية الأدمن بشكل آمن يمنع توقف السيرفر
-    // =========================================================
     const isAdmin = cleanEmail === 'nawh@nawh.com' || (name && name.toString().trim() === 'admin301');
-
-    // إذا كان الحساب الأدمن ولم يتم إرسال رقم هاتف من الواجهة، يتم اعتماد رقم الواتساب الافتراضي
     const finalPhone = phone || (isAdmin ? '201091288031' : '');
-
     const createdAt = new Date().toISOString();
 
     // 3. إنشاء اسم Schema فريد للشركة
@@ -88,7 +94,7 @@ export default async function handler(req, res) {
     // 4. إنشاء الـ Schema الخاصة بالشركة
     await client.query(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
 
-    // 5. إدراج الحساب الجديد في الجدول الرئيسي واسترجاع الحساب الذي تم إنشاؤه
+    // 5. إدراج الحساب الجديد في الجدول الرئيسي
     const insertQuery = `
       INSERT INTO public.app_users (id, name, company_name, email, password, phone, is_admin, active, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -107,19 +113,16 @@ export default async function handler(req, res) {
       createdAt
     ]);
 
-    // تأكيد وتنفيذ العمليات
     await client.query('COMMIT');
 
     const createdUser = insertResult.rows[0];
 
-    // تجميع كائن المستخدم بالصيغتين (is_admin و isAdmin) للتوافق التام مع الواجهة الأمامية (Frontend)
     const formattedUser = {
       ...createdUser,
       companyName: createdUser.company_name,
       isAdmin: createdUser.is_admin
     };
 
-    // إرجاع كائن استجابة مكتمل يمنع تعليق "جاري الإنشاء..."
     return res.status(200).json({
       success: true,
       message: 'تم إنشاء الحساب والـ Schema الخاصة به بنجاح',
@@ -134,6 +137,6 @@ export default async function handler(req, res) {
     console.error('Registration API Error:', error);
     return res.status(500).json({ error: error.message || 'حدث خطأ أثناء إنشاء الحساب والـ Schema' });
   } finally {
-    if (client) await client.end().catch(err => console.error('Error closing client:', err));
+    if (client) client.release(); // إرجاع الاتصال للـ Pool بدلاً من إغلاقه
   }
 }
