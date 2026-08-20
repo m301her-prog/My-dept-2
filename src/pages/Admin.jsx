@@ -37,10 +37,11 @@ export default function Admin() {
   const [localLoading, setLocalLoading] = useState(false);
 
   // رابط الـ API المستقل
-  const ADMIN_API_URL = 'https://nawh-ai25.vercel.app/api/admin-users';
+  const ADMIN_API_URL = '';
 
   // دالة جلب الحسابات المستقلة (GET)
   const fetchAdminUsers = async () => {
+    if (!ADMIN_API_URL) return;
     setLocalLoading(true);
     try {
       const response = await fetch(ADMIN_API_URL);
@@ -103,6 +104,7 @@ export default function Admin() {
 
   // التعامل مع التفعيل والتعطيل مباشرة عبر الـ API الجديد (POST)
   const handleToggleStatus = async (userId, currentStatus) => {
+    if (!ADMIN_API_URL) return;
     setLocalLoading(true);
     const isCurrentlyActive = currentStatus === true || currentStatus === 'true' || currentStatus === 1;
     const nextStatus = !isCurrentlyActive; 
