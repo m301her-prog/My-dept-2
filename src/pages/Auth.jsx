@@ -5,14 +5,13 @@ import { Wallet, Eye, EyeOff, User, Mail, Lock, Phone, Building2 } from 'lucide-
 
 /**
  * Authentication Page
- * Direct API Call Version for Debugging
+ * Handles both login and registration with Arabic, French, and English
  */
 export default function Auth() {
-  const { t, login, showNotification, language } = useApp();
+  const { t, login, register, loading, showNotification, language } = useApp();
   const navigate = useNavigate();
   const [isLogin, setIsLogin] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
-  const [loadingLocal, setLoadingLocal] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     companyName: '',
@@ -61,8 +60,6 @@ export default function Auth() {
     e.preventDefault();
 
     if (!validateForm()) return;
-    setLoadingLocal(true);
-    setErrors({});
 
     try {
       let loggedUser = null;
@@ -70,46 +67,16 @@ export default function Auth() {
       if (isLogin) {
         loggedUser = await login(formData.email, formData.password);
       } else {
-        const targetUrl = 'https://my-dept-2.vercel.app/api/register-user';
-        console.log('🚀 جاري إرسال الطلب إلى:', targetUrl);
-        console.log('📦 البيانات المرسلة:', {
-          name: formData.name,
-          companyName: formData.companyName,
-          email: formData.email,
-          password: formData.password,
-          phone: formData.phone
-        });
-
-        // استدعاء مباشر ومستقل تماماً بدون Context
-        const response = await fetch(targetUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            name: formData.name,
-            companyName: formData.companyName,
-            email: formData.email,
-            password: formData.password,
-            phone: formData.phone
-          })
-        });
-
-        console.log('📡 كود استجابة السيرفر Status:', response.status);
-
-        const data = await response.json();
-        console.log('📥 البيانات المستقبلة من السيرفر:', data);
-
-        if (!response.ok) {
-          throw new Error(data.error || `خطأ من السيرفر برقم: ${response.status}`);
-        }
-
-        loggedUser = data.user;
-        if (showNotification) {
-          showNotification('تم إنشاء الحساب بنجاح', 'success');
-        }
+        loggedUser = await register(
+          formData.name,
+          formData.email,
+          formData.password,
+          formData.phone,
+          formData.companyName
+        );
       }
 
+      // 🛑 فحص حالة تعطيل الحساب من بيانات المستخدم
       if (
         loggedUser?.is_active === false || 
         loggedUser?.status === 'disabled' || 
@@ -117,13 +84,13 @@ export default function Auth() {
         loggedUser?.status === 'inactive'
       ) {
         setErrors({ submit: 'ACCOUNT_DISABLED' });
-        setLoadingLocal(false);
         return;
       }
 
       const cleanEmail = formData.email.trim().toLowerCase();
       const cleanName = formData.name ? formData.name.trim() : '';
 
+      // 🛑 الفحص المعدل لتوجيه الأدمن تلقائياً إلى /admin
       const isSystemAdmin = 
         cleanEmail === 'nawh@nawh.com' || 
         cleanEmail === 'admin@debts.dz' || 
@@ -137,9 +104,7 @@ export default function Auth() {
         navigate('/');
       }
     } catch (error) {
-      console.error('❌ تفاصيل الخطأ الكلية (Catch):', error);
       const errorMsg = error.message || '';
-      
       if (
         errorMsg.toLowerCase().includes('disabled') || 
         errorMsg.includes('معطل') || 
@@ -149,10 +114,8 @@ export default function Auth() {
       ) {
         setErrors({ submit: 'ACCOUNT_DISABLED' });
       } else {
-        setErrors({ submit: `فشل الاتصال: ${errorMsg}` });
+        setErrors({ submit: errorMsg });
       }
-    } finally {
-      setLoadingLocal(false);
     }
   };
 
@@ -186,6 +149,7 @@ export default function Auth() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-100 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 p-4">
       <div className="w-full max-w-md">
+        {/* Logo and Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 shadow-2xl mb-4 transform hover:scale-105 transition-transform">
             <Wallet className="w-12 h-12 text-white" />
@@ -201,7 +165,9 @@ export default function Auth() {
           </p>
         </div>
 
+        {/* Form Card */}
         <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl overflow-hidden">
+          {/* Tab Switcher */}
           <div className="flex border-b border-gray-200 dark:border-gray-700">
             <button
               type="button"
@@ -227,6 +193,7 @@ export default function Auth() {
             </button>
           </div>
 
+          {/* Form */}
           <form onSubmit={handleSubmit} className="p-6 space-y-5">
             {!isLogin && (
               <div>
@@ -370,16 +337,38 @@ export default function Auth() {
 
             {errors.submit && (
               <div className="p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-center">
-                <p className="font-semibold">{errors.submit}</p>
+                {errors.submit === 'ACCOUNT_DISABLED' ? (
+                  <div className="space-y-3">
+                    <p className="font-bold text-base text-red-600 dark:text-red-400">
+                      {language === 'ar' ? 'تم غلق هذا الحساب، يرجى التواصل مع الإدارة' : language === 'fr' ? 'Ce compte est désactivé' : 'This account is disabled'}
+                    </p>
+                    <p className="text-sm font-semibold text-gray-700 dark:text-gray-200 dir-ltr">
+                      📱 واتساب الإدارة: <span className="font-bold text-emerald-600 dark:text-emerald-400 select-all">01091288031</span>
+                    </p>
+                    <a
+                      href={`https://wa.me/201091288031?text=${encodeURIComponent('مرحباً، أود التواصل مع الإدارة لتفعيل حسابي المغلق: ' + formData.email)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-2 w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-sm transition-all shadow-md mt-1"
+                    >
+                      <span>💬</span>
+                      <span>
+                        {language === 'ar' ? 'اضغط هنا للتواصل عبر الواتساب' : language === 'fr' ? 'Contacter via WhatsApp' : 'Contact via WhatsApp'}
+                      </span>
+                    </a>
+                  </div>
+                ) : (
+                  <p>{errors.submit}</p>
+                )}
               </div>
             )}
 
             <button
               type="submit"
-              disabled={loadingLocal}
+              disabled={loading}
               className="w-full py-4 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold text-lg shadow-lg hover:from-emerald-600 hover:to-teal-700 focus:ring-4 focus:ring-emerald-300 dark:focus:ring-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-[1.02] active:scale-[0.98]"
             >
-              {loadingLocal ? (
+              {loading ? (
                 <span className="flex items-center justify-center gap-3">
                   <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin" />
                   {t('loading')}
