@@ -1,20 +1,11 @@
-/**
- * Neon PostgreSQL Service for Debts Manager
- * Handles all database operations with dynamic per-user tables
- * Includes Android Capture event triggers for WebView integration
- * Optimized with CapacitorHttp for native cross-platform compatibility
- * Updated: Support for debt scheduling and installments
- * Updated: Integration with Cloud APIs for data sync & Delete endpoint
- */
-
 import { CapacitorHttp } from '@capacitor/core';
 
-// Cloud API URLs for Neon database sync updated with https://my-dept-2.vercel.app/
+// Cloud API URLs for Neon database sync updated
 const CLOUD_API = {
   registerUser: 'https://my-dept-2.vercel.app/api/register-user',
   loginUser: 'https://my-dept-2.vercel.app/api/login-user',
-  saveData: 'https://my-dept-2.vercel.app/save',
-  getData: 'https://my-dept-2.vercel.app/get',
+  saveData: 'https://my-dept-2.vercel.app/api/save',
+  getData: 'https://my-dept-2.vercel.app/api/get',
   deleteData: 'https://my-dept-2.vercel.app/api/Delete'
 };
 
@@ -196,7 +187,6 @@ const hashPassword = (password) => {
  * ============================================
  */
 
-// تعديل الدالة لاستقبال companyName وإرسالها بالكامل للباك إند
 export const registerUserAndCreateTables = async (name, email, password, phone, companyName = '') => {
   const users = loadFromLocalStorage('registeredUsers', []);
 
@@ -231,7 +221,6 @@ export const registerUserAndCreateTables = async (name, email, password, phone, 
   saveToLocalStorage(userActivitiesKey, []);
 
   try {
-    // إرسال حقل اسم الشركة بكل المسميات المحتملة لضمان توافق الباك إند
     const cloudResponse = await cloudApiRequest(CLOUD_API.registerUser, 'POST', {
       userId: userId,
       name: name,
