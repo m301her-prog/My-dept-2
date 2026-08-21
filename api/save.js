@@ -15,6 +15,10 @@ export default async function handler(req, res) {
 
     // 2. ضبط الاتصال بـ Postgres (Neon)
     const baseConnectionString = process.env.DATABASE_URL;
+    if (!baseConnectionString) {
+        return res.status(500).json({ success: false, error: 'DATABASE_URL غير معرف في متغيرات البيئة' });
+    }
+
     const separator = baseConnectionString.includes('?') ? '&' : '?';
     const finalConnectionString = `${baseConnectionString}${separator}sslmode=verify-full`;
 
@@ -23,40 +27,53 @@ export default async function handler(req, res) {
         ssl: { rejectUnauthorized: false }
     });
 
-    // 3. استقبال البيانات والـ Action
-    const { action, id, debtId, debtData, debt, updates, companyName, company_name } = req.body;
+    // 3. تحليل البودي والبيانات بمرونة قصوى
+    let body = req.body || {};
+    if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch (e) {}
+    }
+
+    const d = body.debtData || body.debt || body.updates || body.data || body;
+    
+    // التقاط اسم العملية بمرونة وتحويلها للأحرف الكبيرة
+    const rawAction = body.action || d.action || 'SAVE';
+    const action = rawAction.toString().toUpperCase().trim();
+
+    const finalId = body.id || body.debtId || d.id || d._id;
+    const userId = body.userId || body.user_id || d.userId || d.user_id;
+    const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
+
     let targetSchema = req.headers['x-tenant-schema'];
 
-    // التقاط كائن البيانات الصحيح بمرونة عالية
-    const d = debtData || debt || updates || req.body.data || req.body || {}; 
-    const finalId = id || debtId || d.id;
-    
-    // التقاط اسم الشركة القادم من البودي بشكل مرن
-    const finalCompanyName = companyName || company_name || d.companyName || d.company_name;
-
-    // 💡 الإصلاح الجوهري: نعتمد حصراً على اسم الشركة لتحديد السكيمّا وليس على الـ userId
+    // 4. تحديد اسم السكيمّا تلقائياً بمرونة
     if (!targetSchema || targetSchema.trim() === '') {
-        if (finalCompanyName) {
-            targetSchema = `schema_${finalCompanyName.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase()}`;
-        } else {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'اسم الشركة مطلوب لتحديد السكيمّا المستهدفة لحفظ البيانات.' 
-            });
+        if (finalCompanyName && finalCompanyName.toString().trim() !== '') {
+            const cleanComp = finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+            targetSchema = cleanComp ? `schema_${cleanComp}` : null;
+        }
+        
+        // بديل آخر في حال كانت تسمية الشركة بالعربية فقط أو غير موجودة
+        if (!targetSchema && userId) {
+            const cleanUser = userId.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+            targetSchema = `user_${cleanUser}`;
+        }
+        
+        // fallback افتراضي لمنع خطأ 400 وتوقف النظام
+        if (!targetSchema) {
+            targetSchema = 'schema_default';
         }
     }
+
+    const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
     try {
         await client.connect();
         
-        // 4. معالجة وتفعيل السكيمّا الخاصة بالشركة المستهدفة حصراً
-        const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+        // 5. تفعيل وإنشاء السكيمّا
+        await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
+        await client.query(`SET search_path TO "${cleanSchema}";`);
         
-        // نستخدم الميزة لفتح السكيمّا الحالية وضبط المسار إليها مباشرة دون تشتت البيانات
-        await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}"`);
-        await client.query(`SET search_path TO "${cleanSchema}"`);
-        
-        // تأكيد إنشاء الجدول بداخل السكيمّا الخاصة بالشركة قبل تنفيذ أي استعلام
+        // إنشـاء الجدول تلقائياً إن لم يكن موجوداً
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id TEXT PRIMARY KEY,
@@ -64,21 +81,40 @@ export default async function handler(req, res) {
                 person_name TEXT NOT NULL,
                 phone TEXT,
                 amount NUMERIC NOT NULL,
-                currency TEXT,
+                currency TEXT DEFAULT 'DZD',
                 due_date DATE,
                 notes TEXT,
-                status TEXT,
-                is_scheduled BOOLEAN,
+                status TEXT DEFAULT 'pending',
+                is_scheduled BOOLEAN DEFAULT FALSE,
                 schedule_type TEXT,
-                installments_count INT,
-                first_payment_date DATE
+                installments_count INT DEFAULT 0,
+                first_payment_date DATE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+        `);
+
+        // تحديث الهيكل تلقائياً للأعمدة القديمة
+        await client.query(`
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'DZD';
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS notes TEXT;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN DEFAULT FALSE;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS schedule_type TEXT;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS installments_count INT DEFAULT 0;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS first_payment_date DATE;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
         `);
 
         let query = '';
         let params = [];
 
-        if (action === 'ADD' || action === 'INSERT' || action === 'UPDATE') {
+        // 6. قبول جميع التسميات القادمة للعملية (ADD / SAVE / UPDATE / ADD_DEBT إلخ)
+        const isSaveAction = ['SAVE', 'ADD', 'INSERT', 'UPDATE', 'ADD_DEBT', 'UPDATE_DEBT', 'SAVE_DATA', 'INIT_SCHEMA'].includes(action);
+
+        if (isSaveAction) {
             const activeId = finalId || `debt_${Date.now()}`;
             const type = d.type || 'owed_to_me';
             const personName = d.personName || d.person_name || d.person_Name || 'غير محدد';
@@ -98,36 +134,54 @@ export default async function handler(req, res) {
             const dueDate = cleanDate(d.dueDate || d.due_date);
             const firstPaymentDate = cleanDate(d.firstPaymentDate || d.first_payment_date);
 
-            if (action === 'ADD' || action === 'INSERT') {
-                query = `
-                    INSERT INTO debts (
-                        id, type, person_name, phone, amount, currency, due_date, 
-                        notes, status, is_scheduled, schedule_type, installments_count, first_payment_date
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                    RETURNING *;
-                `;
-                params = [activeId, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate];
-            } else {
-                query = `
-                    UPDATE debts SET 
-                        type = $2, person_name = $3, phone = $4, amount = $5, currency = $6, due_date = $7, 
-                        notes = $8, status = $9, is_scheduled = $10, schedule_type = $11, installments_count = $12, first_payment_date = $13
-                    WHERE id = $1
-                    RETURNING *;
-                `;
-                params = [activeId, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate];
-            }
+            // استعلام Upsert (حفظ أو تحديث تلقائي حسب ID)
+            query = `
+                INSERT INTO debts (
+                    id, type, person_name, phone, amount, currency, due_date, 
+                    notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+                ON CONFLICT (id) DO UPDATE SET
+                    type = EXCLUDED.type,
+                    person_name = EXCLUDED.person_name,
+                    phone = EXCLUDED.phone,
+                    amount = EXCLUDED.amount,
+                    currency = EXCLUDED.currency,
+                    due_date = EXCLUDED.due_date,
+                    notes = EXCLUDED.notes,
+                    status = EXCLUDED.status,
+                    is_scheduled = EXCLUDED.is_scheduled,
+                    schedule_type = EXCLUDED.schedule_type,
+                    installments_count = EXCLUDED.installments_count,
+                    first_payment_date = EXCLUDED.first_payment_date,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING *;
+            `;
+            params = [activeId, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate];
 
-        } else if (action === 'DELETE') {
-            if (!finalId) return res.status(400).json({ success: false, error: 'المعرف id مطلوب' });
+        } else if (['DELETE', 'DELETE_DEBT', 'DELETE_DATA'].includes(action)) {
+            if (!finalId) {
+                return res.status(400).json({ success: false, error: 'المعرف (id) مطلوب لإتمام عملية الحذف' });
+            }
             query = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
             params = [finalId];
+
+        } else if (['GET', 'GET_DATA', 'FETCH'].includes(action)) {
+            query = `SELECT * FROM debts ORDER BY created_at DESC;`;
+            params = [];
+
         } else {
-            return res.status(400).json({ success: false, error: 'العملية غير مدعومة' });
+            return res.status(400).json({ success: false, error: `العملية (${action}) غير مدعومة` });
         }
 
         const result = await client.query(query, params);
-        return res.status(200).json({ success: true, rows: result.rows, rowCount: result.rowCount });
+
+        return res.status(200).json({ 
+            success: true, 
+            schemaUsed: cleanSchema, 
+            rows: result.rows, 
+            debt: result.rows[0] || null,
+            rowCount: result.rowCount 
+        });
 
     } catch (error) {
         console.error(`[DATABASE ERROR ON ${action}]:`, error);
