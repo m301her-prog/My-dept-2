@@ -1,7 +1,6 @@
 import pg from 'pg';
 
 export default async function handler(req, res) {
-    // 1. إعدادات CORS الكاملة
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -13,7 +12,6 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-    // 2. ضبط الاتصال بـ Postgres (Neon)
     const baseConnectionString = process.env.DATABASE_URL;
     if (!baseConnectionString) {
         return res.status(500).json({ success: false, error: 'DATABASE_URL غير معرف في متغيرات البيئة' });
@@ -27,40 +25,31 @@ export default async function handler(req, res) {
         ssl: { rejectUnauthorized: false }
     });
 
-    // 3. تحليل البودي والبيانات بمرونة قصوى
     let body = req.body || {};
     if (typeof body === 'string') {
         try { body = JSON.parse(body); } catch (e) {}
     }
 
     const d = body.debtData || body.debt || body.updates || body.data || body;
-    
-    // التقاط اسم العملية بمرونة
     const rawAction = body.action || d.action || 'SAVE';
     const action = rawAction.toString().toUpperCase().trim();
 
     const finalId = body.id || body.debtId || d.id || d._id;
-    // التقاط user_id بكافة الصيغ المحتملة
     const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
     const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
     let targetSchema = req.headers['x-tenant-schema'];
 
-    // 4. تحديد اسم السكيمّا تلقائياً بمرونة
     if (!targetSchema || targetSchema.trim() === '') {
         if (finalCompanyName && finalCompanyName.toString().trim() !== '') {
             const cleanComp = finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
             targetSchema = cleanComp ? `schema_${cleanComp}` : null;
         }
-        
         if (!targetSchema && userId) {
             const cleanUser = userId.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
             targetSchema = `user_${cleanUser}`;
         }
-        
-        if (!targetSchema) {
-            targetSchema = 'schema_default';
-        }
+        if (!targetSchema) targetSchema = 'schema_default';
     }
 
     const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
@@ -68,15 +57,14 @@ export default async function handler(req, res) {
     try {
         await client.connect();
         
-        // 5. تفعيل وإنشاء السكيمّا
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
         
-        // إنشاء الجدول إن لم يكن موجوداً
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id TEXT PRIMARY KEY,
                 user_id TEXT,
+                title TEXT,
                 type TEXT NOT NULL,
                 person_name TEXT NOT NULL,
                 phone TEXT,
@@ -94,23 +82,11 @@ export default async function handler(req, res) {
             );
         `);
 
-        // 💡 إصلاح مشكلة NOT NULL الكارثية للعمود القديم إن وجد
+        // 💡 إزالة قيود الحظر (NOT NULL) الكارثية لمنع الأخطاء المستمرة
+        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS title TEXT;`);
+        await client.query(`ALTER TABLE debts ALTER COLUMN title DROP NOT NULL;`);
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS user_id TEXT;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN user_id DROP NOT NULL;`);
-        
-        // تحديث الأعمدة الأخرى للتوافق
-        await client.query(`
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'DZD';
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS notes TEXT;
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN DEFAULT FALSE;
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS schedule_type TEXT;
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS installments_count INT DEFAULT 0;
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS first_payment_date DATE;
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
-            ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
-        `);
 
         let query = '';
         let params = [];
@@ -119,8 +95,9 @@ export default async function handler(req, res) {
 
         if (isSaveAction) {
             const activeId = finalId || `debt_${Date.now()}`;
-            const type = d.type || 'owed_to_me';
             const personName = d.personName || d.person_name || d.person_Name || 'غير محدد';
+            const title = d.title || d.notes || personName || 'دين جديد';
+            const type = d.type || 'owed_to_me';
             const phone = d.phone || d.personPhone || d.person_phone || null;
             const amount = parseFloat(d.amount) || 0;
             const currency = d.currency || 'DZD';
@@ -137,14 +114,14 @@ export default async function handler(req, res) {
             const dueDate = cleanDate(d.dueDate || d.due_date);
             const firstPaymentDate = cleanDate(d.firstPaymentDate || d.first_payment_date);
 
-            // 💡 تضمين user_id في الاستعلام لتجنب أخطاء قاعدة البيانات
             query = `
                 INSERT INTO debts (
-                    id, user_id, type, person_name, phone, amount, currency, due_date, 
+                    id, user_id, title, type, person_name, phone, amount, currency, due_date, 
                     notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
                 ON CONFLICT (id) DO UPDATE SET
                     user_id = COALESCE(EXCLUDED.user_id, debts.user_id),
+                    title = COALESCE(EXCLUDED.title, debts.title),
                     type = EXCLUDED.type,
                     person_name = EXCLUDED.person_name,
                     phone = EXCLUDED.phone,
@@ -160,12 +137,10 @@ export default async function handler(req, res) {
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING *;
             `;
-            params = [activeId, userId, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate];
+            params = [activeId, userId, title, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate];
 
         } else if (['DELETE', 'DELETE_DEBT', 'DELETE_DATA'].includes(action)) {
-            if (!finalId) {
-                return res.status(400).json({ success: false, error: 'المعرف (id) مطلوب لإتمام عملية الحذف' });
-            }
+            if (!finalId) return res.status(400).json({ success: false, error: 'المعرف (id) مطلوب' });
             query = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
             params = [finalId];
 
