@@ -82,9 +82,17 @@ export default async function handler(req, res) {
             );
         `);
 
-        // 💡 إزالة قيود الحظر (NOT NULL) الكارثية لمنع الأخطاء المستمرة
+        // 💡 تعديل قيود الأعمدة وتحديد قيم افتراضية مرنة لجميع الحقول الأساسية
+        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
+        await client.query(`ALTER TABLE debts ALTER COLUMN created_at DROP NOT NULL;`);
+        await client.query(`ALTER TABLE debts ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;`);
+        
+        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
+        await client.query(`ALTER TABLE debts ALTER COLUMN updated_at DROP NOT NULL;`);
+
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS title TEXT;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN title DROP NOT NULL;`);
+
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS user_id TEXT;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN user_id DROP NOT NULL;`);
 
@@ -113,12 +121,14 @@ export default async function handler(req, res) {
             };
             const dueDate = cleanDate(d.dueDate || d.due_date);
             const firstPaymentDate = cleanDate(d.firstPaymentDate || d.first_payment_date);
+            const createdAtVal = cleanDate(d.createdAt || d.created_at) || new Date().toISOString();
 
+            // 💡 تمرير created_at صراحة في الاستعلام مع تفعيل CURRENT_TIMESTAMP كبديل
             query = `
                 INSERT INTO debts (
                     id, user_id, title, type, person_name, phone, amount, currency, due_date, 
-                    notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
+                    notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
                 ON CONFLICT (id) DO UPDATE SET
                     user_id = COALESCE(EXCLUDED.user_id, debts.user_id),
                     title = COALESCE(EXCLUDED.title, debts.title),
@@ -137,7 +147,7 @@ export default async function handler(req, res) {
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING *;
             `;
-            params = [activeId, userId, title, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate];
+            params = [activeId, userId, title, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate, createdAtVal];
 
         } else if (['DELETE', 'DELETE_DEBT', 'DELETE_DATA'].includes(action)) {
             if (!finalId) return res.status(400).json({ success: false, error: 'المعرف (id) مطلوب' });
