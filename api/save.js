@@ -7,14 +7,18 @@ export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader(
         'Access-Control-Allow-Headers',
-        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, x-tenant-schema'
+        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, x-tenant-schema, x-user-email, x-user-id'
     );
 
     if (req.method === 'OPTIONS') return res.status(200).end();
-    if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+    if (req.method !== 'POST') return res.status(405).json({ success: false, error: 'Method Not Allowed' });
 
     // 2. ضبط الاتصال بـ Postgres (Neon)
     const baseConnectionString = process.env.DATABASE_URL;
+    if (!baseConnectionString) {
+        return res.status(500).json({ success: false, error: 'DATABASE_URL غير معرف في متغيرات البيئة' });
+    }
+
     const separator = baseConnectionString.includes('?') ? '&' : '?';
     const finalConnectionString = `${baseConnectionString}${separator}sslmode=verify-full`;
 
@@ -23,40 +27,79 @@ export default async function handler(req, res) {
         ssl: { rejectUnauthorized: false }
     });
 
-    // 3. استقبال البيانات والـ Action
-    const { action, id, debtId, debtData, debt, updates, companyName, company_name } = req.body;
-    let targetSchema = req.headers['x-tenant-schema'];
-
-    // التقاط كائن البيانات الصحيح بمرونة عالية
-    const d = debtData || debt || updates || req.body.data || req.body || {}; 
-    const finalId = id || debtId || d.id;
-    
-    // التقاط اسم الشركة القادم من البودي بشكل مرن
-    const finalCompanyName = companyName || company_name || d.companyName || d.company_name;
-
-    // 💡 الإصلاح الجوهري: نعتمد حصراً على اسم الشركة لتحديد السكيمّا وليس على الـ userId
-    if (!targetSchema || targetSchema.trim() === '') {
-        if (finalCompanyName) {
-            targetSchema = `schema_${finalCompanyName.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase()}`;
-        } else {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'اسم الشركة مطلوب لتحديد السكيمّا المستهدفة لحفظ البيانات.' 
-            });
-        }
-    }
-
     try {
+        // معالجة الـ body إذا وصل كـ string
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (e) { console.error('Failed to parse body:', e); }
+        }
+        body = body || {};
+
+        // 3. استقبال البيانات والـ Action
+        const { action, id, debtId, debtData, debt, updates, companyName, company_name, email, userId, user_id } = body;
+        let targetSchema = req.headers['x-tenant-schema'] || body.schemaName || body.tenantSchema;
+
+        // التقاط كائن البيانات الصحيح بمرونة عالية
+        const d = debtData || debt || updates || body.data || body; 
+        const finalId = id || debtId || d.id;
+        
+        // التقاط معلمات المستخدم/الشركة المرنة
+        const finalCompanyName = companyName || company_name || d.companyName || d.company_name;
+        const finalEmail = email || d.email || req.headers['x-user-email'];
+        const finalUserId = userId || user_id || d.userId || req.headers['x-user-id'];
+
         await client.connect();
-        
-        // 4. معالجة وتفعيل السكيمّا الخاصة بالشركة المستهدفة حصراً
-        const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-        
-        // نستخدم الميزة لفتح السكيمّا الحالية وضبط المسار إليها مباشرة دون تشتت البيانات
-        await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}"`);
-        await client.query(`SET search_path TO "${cleanSchema}"`);
-        
-        // تأكيد إنشاء الجدول بداخل السكيمّا الخاصة بالشركة قبل تنفيذ أي استعلام
+
+        // 💡 آلية بحث ذكية وموثوقة عن السكيمّا المستهدفة
+        if (!targetSchema || targetSchema.trim() === '' || targetSchema === 'public') {
+            
+            // خيار 1: تحويل اسم الشركة المباشر القادم مع الطلب إلى صيغة schema_
+            if (finalCompanyName) {
+                let cleanCompany = finalCompanyName.toString().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+                if (cleanCompany.startsWith('schema_')) cleanCompany = cleanCompany.replace('schema_', '');
+                if (cleanCompany) targetSchema = `schema_${cleanCompany}`;
+            }
+
+            // خيار 2: البحث عن السكيمّا من جدول app_users بواسطة البريد أو الـ userId
+            if ((!targetSchema || targetSchema === 'public') && (finalEmail || finalUserId)) {
+                const userQuery = `
+                    SELECT company_name FROM public.app_users 
+                    WHERE (LOWER(email) = LOWER($1) AND $1 != '') 
+                       OR (id = $2 AND $2 != '') 
+                    LIMIT 1;
+                `;
+                const userRes = await client.query(userQuery, [finalEmail || '', finalUserId || '']);
+                
+                if (userRes.rows.length > 0 && userRes.rows[0].company_name) {
+                    let cleanCompany = userRes.rows[0].company_name.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+                    if (cleanCompany.startsWith('schema_')) cleanCompany = cleanCompany.replace('schema_', '');
+                    if (cleanCompany) targetSchema = `schema_${cleanCompany}`;
+                }
+            }
+
+            // خيار احتياطي أخير عند عدم استخراج اسم الشركة
+            if (!targetSchema || targetSchema.trim() === '') {
+                await client.end().catch(() => {});
+                return res.status(400).json({ 
+                    success: false, 
+                    error: 'لم يتم العثور على اسم الشركة أو السكيمّا الخاصة بالحساب.' 
+                });
+            }
+        }
+
+        // 4. معالجة وتفعيل السكيمّا الخاصة بالشركة المستهدفة
+        let cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+        if (!cleanSchema.startsWith('schema_') && cleanSchema !== 'public') {
+            cleanSchema = `schema_${cleanSchema}`;
+        }
+
+        // استخدام pg.Client.prototype.escapeIdentifier للتعامل الآمن مع الاسم
+        const safeSchemaIdentifier = pg.Client.prototype.escapeIdentifier(cleanSchema);
+
+        await client.query(`CREATE SCHEMA IF NOT EXISTS ${safeSchemaIdentifier}`);
+        await client.query(`SET search_path TO ${safeSchemaIdentifier}`);
+
+        // تأكيد إنشاء الجدول داخل السكيمّا المحددة
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id TEXT PRIMARY KEY,
@@ -119,18 +162,27 @@ export default async function handler(req, res) {
             }
 
         } else if (action === 'DELETE') {
-            if (!finalId) return res.status(400).json({ success: false, error: 'المعرف id مطلوب' });
+            if (!finalId) {
+                await client.end().catch(() => {});
+                return res.status(400).json({ success: false, error: 'المعرف id مطلوب لإتمام الحذف' });
+            }
             query = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
             params = [finalId];
         } else {
-            return res.status(400).json({ success: false, error: 'العملية غير مدعومة' });
+            await client.end().catch(() => {});
+            return res.status(400).json({ success: false, error: 'العملية المطلوب تنفيذها غير مدعومة' });
         }
 
         const result = await client.query(query, params);
-        return res.status(200).json({ success: true, rows: result.rows, rowCount: result.rowCount });
+        return res.status(200).json({ 
+            success: true, 
+            schemaName: cleanSchema, 
+            rows: result.rows, 
+            rowCount: result.rowCount 
+        });
 
     } catch (error) {
-        console.error(`[DATABASE ERROR ON ${action}]:`, error);
+        console.error(`[DATABASE ERROR ON ${req.body?.action}]:`, error);
         return res.status(500).json({ success: false, error: error.message });
     } finally {
         await client.end().catch(err => console.error('Error closing client:', err));
