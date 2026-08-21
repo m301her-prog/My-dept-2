@@ -1,12 +1,43 @@
 import pg from 'pg';
 
+// 💡 دالة استخراج وتنظيف اسم الشركة / السكيمّا من جميع أجزاء Request الواجهة
+function extractSchemaName(req, body) {
+    // 1. الفحص من الـ Headers المباشرة
+    const headerSchema = req.headers['x-tenant-schema'] || req.headers['x-company-name'] || req.headers['tenant'];
+    if (headerSchema && headerSchema.trim() !== '') {
+        return headerSchema;
+    }
+
+    // 2. البحث داخل body والـ nested objects التي ترسلها الواجهة
+    const d = body.debtData || body.debt || body.updates || body.data || body;
+    const userObj = body.user || d.user || {};
+    const companyObj = body.company || d.company || {};
+
+    const rawCompany = 
+        body.companyName || body.company_name || body.companyId || body.company_id ||
+        d.companyName || d.company_name || d.companyId || d.company_id ||
+        userObj.companyName || userObj.company_name || userObj.company ||
+        companyObj.name || companyObj.companyName || companyObj.id ||
+        req.headers['x-user-id'] || body.userId || body.user_id || d.userId || d.user_id;
+
+    if (!rawCompany) return null;
+
+    // تنظيف الاسم وتحويله إلى صيغة schema_companyname
+    const strVal = typeof rawCompany === 'object' ? JSON.stringify(rawCompany) : String(rawCompany);
+    const cleanCompany = strVal.trim().replace(/^usr_/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+
+    if (!cleanCompany) return null;
+
+    return cleanCompany.startsWith('schema_') ? cleanCompany : `schema_${cleanCompany}`;
+}
+
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader(
         'Access-Control-Allow-Headers',
-        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, x-tenant-schema'
+        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, x-tenant-schema, x-company-name, x-user-id'
     );
 
     if (req.method === 'OPTIONS') return res.status(200).end();
@@ -30,37 +61,33 @@ export default async function handler(req, res) {
         try { body = JSON.parse(body); } catch (e) {}
     }
 
+    // 💡 استخراج السكيمّا المباشرة باستخدام الدالة الجديدة
+    const rawSchema = extractSchemaName(req, body);
+
+    if (!rawSchema) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'لم يتم العثور على اسم الشركة أو السكيمّا في الطلب.',
+            debugReceivedData: {
+                headers: req.headers,
+                bodyKeys: Object.keys(body)
+            }
+        });
+    }
+
+    const cleanSchema = rawSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+
     const d = body.debtData || body.debt || body.updates || body.data || body;
     const rawAction = body.action || d.action || 'SAVE';
     const action = rawAction.toString().toUpperCase().trim();
 
     const finalId = body.id || body.debtId || body._id || d.id || d.debtId || d._id || null;
     const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
-    const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
-
-    // 💡 الاعتماد الحصري على اسم الشركة أو الـ Header الخاص بالـ tenant دون أي قيم افتراضية
-    let rawSchema = req.headers['x-tenant-schema'];
-
-    if (!rawSchema || rawSchema.trim() === '') {
-        const sanitizedCompany = finalCompanyName ? finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
-        if (sanitizedCompany) {
-            rawSchema = `schema_${sanitizedCompany}`;
-        }
-    }
-
-    if (!rawSchema || rawSchema.trim() === '') {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'اسم الشركة (companyName) أو الـ Header (x-tenant-schema) مطلوب لتحديد السكيمّا الخاصة بالعملية' 
-        });
-    }
-
-    const cleanSchema = rawSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
     try {
         await client.connect();
 
-        // 💡 التوجيه المباشر والStrict للسكيمّا الخاصة بالشركة فقط
+        // 💡 التوجيه للسكيمّا المستخرجة فقط
         await client.query(`SET search_path TO "${cleanSchema}";`);
 
         let query = '';
