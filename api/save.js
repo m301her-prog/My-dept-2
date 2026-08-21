@@ -40,16 +40,18 @@ export default async function handler(req, res) {
 
     let targetSchema = req.headers['x-tenant-schema'];
 
+    // 💡 مطابقة منطق كود التسجيل لاستخراج اسم السكيمّا بدقة
     if (!targetSchema || targetSchema.trim() === '') {
-        if (finalCompanyName && finalCompanyName.toString().trim() !== '') {
-            const cleanComp = finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-            targetSchema = cleanComp ? `schema_${cleanComp}` : null;
+        const sanitizedCompany = finalCompanyName ? finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
+        const cleanUserId = userId ? userId.toString().trim().replace('usr_', '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
+
+        if (sanitizedCompany) {
+            targetSchema = `schema_${sanitizedCompany}`;
+        } else if (cleanUserId) {
+            targetSchema = `schema_user_${cleanUserId}`;
+        } else {
+            targetSchema = 'schema_default';
         }
-        if (!targetSchema && userId) {
-            const cleanUser = userId.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-            targetSchema = `user_${cleanUser}`;
-        }
-        if (!targetSchema) targetSchema = 'schema_default';
     }
 
     const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
@@ -82,7 +84,6 @@ export default async function handler(req, res) {
             );
         `);
 
-        // 💡 تعديل قيود الأعمدة وتحديد قيم افتراضية مرنة لجميع الحقول الأساسية
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN created_at DROP NOT NULL;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;`);
@@ -123,7 +124,6 @@ export default async function handler(req, res) {
             const firstPaymentDate = cleanDate(d.firstPaymentDate || d.first_payment_date);
             const createdAtVal = cleanDate(d.createdAt || d.created_at) || new Date().toISOString();
 
-            // 💡 تمرير created_at صراحة في الاستعلام مع تفعيل CURRENT_TIMESTAMP كبديل
             query = `
                 INSERT INTO debts (
                     id, user_id, title, type, person_name, phone, amount, currency, due_date, 
