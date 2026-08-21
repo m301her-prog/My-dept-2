@@ -104,7 +104,7 @@ export default async function handler(req, res) {
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}", public;`);
 
-        // 💡 2. إنشاء الهيكل داخل السكيمّا المحددة
+        // 💡 2. إنشاء الهيكل وضمان وجود كافة الأعمدة للجدول الموجود مسبقاً
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id VARCHAR(255) PRIMARY KEY,
@@ -125,7 +125,13 @@ export default async function handler(req, res) {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'DZD';
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN DEFAULT false;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS schedule_type VARCHAR(50);
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS installments_count INT DEFAULT 0;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS first_payment_date TIMESTAMP;
         `);
 
         let query = '';
@@ -176,7 +182,6 @@ export default async function handler(req, res) {
                     user_id = COALESCE(EXCLUDED.user_id, debts.user_id),
                     title = COALESCE(EXCLUDED.title, debts.title),
                     type = EXCLUDED.type,
-                    person_name = EXCLUDED.person_name,
                     person_name = EXCLUDED.person_name,
                     phone = EXCLUDED.phone,
                     amount = EXCLUDED.amount,
