@@ -34,69 +34,34 @@ export default async function handler(req, res) {
     const rawAction = body.action || d.action || 'SAVE';
     const action = rawAction.toString().toUpperCase().trim();
 
-    // 💡 البحث عن id في كافة المواضع المحتملة
     const finalId = body.id || body.debtId || body._id || d.id || d.debtId || d._id || null;
     const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
     const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
-    let targetSchema = req.headers['x-tenant-schema'];
+    // 💡 الاعتماد الحصري على اسم الشركة أو الـ Header الخاص بالـ tenant دون أي قيم افتراضية
+    let rawSchema = req.headers['x-tenant-schema'];
 
-    // 💡 استخراج اسم السكيمّا المتوافق مع ملف التسجيل
-    if (!targetSchema || targetSchema.trim() === '') {
+    if (!rawSchema || rawSchema.trim() === '') {
         const sanitizedCompany = finalCompanyName ? finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
-        const cleanUserId = userId ? userId.toString().trim().replace('usr_', '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
-
         if (sanitizedCompany) {
-            targetSchema = `schema_${sanitizedCompany}`;
-        } else if (cleanUserId) {
-            targetSchema = `schema_user_${cleanUserId}`;
-        } else {
-            targetSchema = 'schema_default';
+            rawSchema = `schema_${sanitizedCompany}`;
         }
     }
 
-    const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+    if (!rawSchema || rawSchema.trim() === '') {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'اسم الشركة (companyName) أو الـ Header (x-tenant-schema) مطلوب لتحديد السكيمّا الخاصة بالعملية' 
+        });
+    }
+
+    const cleanSchema = rawSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
     try {
         await client.connect();
-        
-        await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
+
+        // 💡 التوجيه المباشر والStrict للسكيمّا الخاصة بالشركة فقط
         await client.query(`SET search_path TO "${cleanSchema}";`);
-        
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS debts (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                title TEXT,
-                type TEXT NOT NULL,
-                person_name TEXT NOT NULL,
-                phone TEXT,
-                amount NUMERIC NOT NULL,
-                currency TEXT DEFAULT 'DZD',
-                due_date DATE,
-                notes TEXT,
-                status TEXT DEFAULT 'pending',
-                is_scheduled BOOLEAN DEFAULT FALSE,
-                schedule_type TEXT,
-                installments_count INT DEFAULT 0,
-                first_payment_date DATE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
-        await client.query(`ALTER TABLE debts ALTER COLUMN created_at DROP NOT NULL;`);
-        await client.query(`ALTER TABLE debts ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;`);
-        
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
-        await client.query(`ALTER TABLE debts ALTER COLUMN updated_at DROP NOT NULL;`);
-
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS title TEXT;`);
-        await client.query(`ALTER TABLE debts ALTER COLUMN title DROP NOT NULL;`);
-
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS user_id TEXT;`);
-        await client.query(`ALTER TABLE debts ALTER COLUMN user_id DROP NOT NULL;`);
 
         let query = '';
         let params = [];
@@ -116,7 +81,6 @@ export default async function handler(req, res) {
             params = [];
 
         } else {
-            // 💡 الافتراضي: الحفظ والأوامر الأخرى
             const activeId = finalId || `debt_${Date.now()}`;
             const personName = d.personName || d.person_name || d.person_Name || 'غير محدد';
             const title = d.title || d.notes || personName || 'دين جديد';
