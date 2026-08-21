@@ -1,14 +1,13 @@
 import pg from 'pg';
 
-// 💡 دالة استخراج وتنظيف اسم الشركة / السكيمّا من جميع أجزاء Request الواجهة
-function extractSchemaName(req, body) {
-    // 1. الفحص من الـ Headers المباشرة
+async function resolveSchemaName(client, req, body) {
+    // 1. الفحص المباشر من الـ Headers
     const headerSchema = req.headers['x-tenant-schema'] || req.headers['x-company-name'] || req.headers['tenant'];
     if (headerSchema && headerSchema.trim() !== '') {
-        return headerSchema;
+        return sanitizeSchema(headerSchema);
     }
 
-    // 2. البحث داخل body والـ nested objects التي ترسلها الواجهة
+    // 2. الفحص من كائن الـ Body والـ Nested Objects
     const d = body.debtData || body.debt || body.updates || body.data || body;
     const userObj = body.user || d.user || {};
     const companyObj = body.company || d.company || {};
@@ -17,18 +16,37 @@ function extractSchemaName(req, body) {
         body.companyName || body.company_name || body.companyId || body.company_id ||
         d.companyName || d.company_name || d.companyId || d.company_id ||
         userObj.companyName || userObj.company_name || userObj.company ||
-        companyObj.name || companyObj.companyName || companyObj.id ||
-        req.headers['x-user-id'] || body.userId || body.user_id || d.userId || d.user_id;
+        companyObj.name || companyObj.companyName || companyObj.id;
 
-    if (!rawCompany) return null;
+    if (rawCompany) {
+        return sanitizeSchema(rawCompany);
+    }
 
-    // تنظيف الاسم وتحويله إلى صيغة schema_companyname
-    const strVal = typeof rawCompany === 'object' ? JSON.stringify(rawCompany) : String(rawCompany);
-    const cleanCompany = strVal.trim().replace(/^usr_/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+    // 3. الاستعلام من قاعدة البيانات لجلب اسم شركة آخر جلسة/مستخدم عبر userId
+    const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'];
+    if (userId) {
+        try {
+            const dbRes = await client.query(
+                `SELECT company_name, company_id, company FROM public.users WHERE id = $1 OR user_id = $1 LIMIT 1;`,
+                [userId]
+            );
+            if (dbRes.rows.length > 0) {
+                const fetchedCompany = dbRes.rows[0].company_name || dbRes.rows[0].company_id || dbRes.rows[0].company;
+                if (fetchedCompany) return sanitizeSchema(fetchedCompany);
+            }
+        } catch (e) {
+            console.warn('[SCHEMA RESOLUTION DB FALLBACK ERROR]:', e.message);
+        }
+    }
 
-    if (!cleanCompany) return null;
+    return null;
+}
 
-    return cleanCompany.startsWith('schema_') ? cleanCompany : `schema_${cleanCompany}`;
+function sanitizeSchema(rawName) {
+    const strVal = typeof rawName === 'object' ? JSON.stringify(rawName) : String(rawName);
+    const clean = strVal.trim().replace(/^usr_/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+    if (!clean) return null;
+    return clean.startsWith('schema_') ? clean : `schema_${clean}`;
 }
 
 export default async function handler(req, res) {
@@ -61,34 +79,54 @@ export default async function handler(req, res) {
         try { body = JSON.parse(body); } catch (e) {}
     }
 
-    // 💡 استخراج السكيمّا المباشرة باستخدام الدالة الجديدة
-    const rawSchema = extractSchemaName(req, body);
-
-    if (!rawSchema) {
-        return res.status(400).json({ 
-            success: false, 
-            error: 'لم يتم العثور على اسم الشركة أو السكيمّا في الطلب.',
-            debugReceivedData: {
-                headers: req.headers,
-                bodyKeys: Object.keys(body)
-            }
-        });
-    }
-
-    const cleanSchema = rawSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-
-    const d = body.debtData || body.debt || body.updates || body.data || body;
-    const rawAction = body.action || d.action || 'SAVE';
-    const action = rawAction.toString().toUpperCase().trim();
-
-    const finalId = body.id || body.debtId || body._id || d.id || d.debtId || d._id || null;
-    const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
-
     try {
         await client.connect();
 
-        // 💡 التوجيه للسكيمّا المستخرجة فقط
-        await client.query(`SET search_path TO "${cleanSchema}";`);
+        // 💡 جلب السكيمّا تلقائياً بآلية الاستعلام الاحتياطي
+        const cleanSchema = await resolveSchemaName(client, req, body);
+
+        if (!cleanSchema) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'تعذر تحديد اسم الشركة أو السكيمّا الخاصة بالمستخدم.',
+                debugReceivedData: { headers: req.headers, bodyKeys: Object.keys(body) }
+            });
+        }
+
+        const d = body.debtData || body.debt || body.updates || body.data || body;
+        const rawAction = body.action || d.action || 'SAVE';
+        const action = rawAction.toString().toUpperCase().trim();
+
+        const finalId = body.id || body.debtId || body._id || d.id || d.debtId || d._id || null;
+        const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
+
+        // 💡 1. إنشائها وتحديد مسار العمل
+        await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
+        await client.query(`SET search_path TO "${cleanSchema}", public;`);
+
+        // 💡 2. إنشاء الهيكل داخل السكيمّا المحددة
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS debts (
+                id VARCHAR(255) PRIMARY KEY,
+                user_id VARCHAR(255),
+                title TEXT,
+                type VARCHAR(50),
+                person_name TEXT,
+                phone TEXT,
+                amount NUMERIC(12,2) DEFAULT 0,
+                currency VARCHAR(10) DEFAULT 'DZD',
+                due_date TIMESTAMP,
+                notes TEXT,
+                status VARCHAR(50) DEFAULT 'pending',
+                is_scheduled BOOLEAN DEFAULT false,
+                schedule_type VARCHAR(50),
+                installments_count INT DEFAULT 0,
+                first_payment_date TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;
+        `);
 
         let query = '';
         let params = [];
@@ -139,6 +177,7 @@ export default async function handler(req, res) {
                     title = COALESCE(EXCLUDED.title, debts.title),
                     type = EXCLUDED.type,
                     person_name = EXCLUDED.person_name,
+                    person_name = EXCLUDED.person_name,
                     phone = EXCLUDED.phone,
                     amount = EXCLUDED.amount,
                     currency = EXCLUDED.currency,
@@ -166,7 +205,7 @@ export default async function handler(req, res) {
         });
 
     } catch (error) {
-        console.error(`[DATABASE ERROR ON ${action}]:`, error);
+        console.error(`[DATABASE ERROR]:`, error);
         return res.status(500).json({ success: false, error: error.message });
     } finally {
         await client.end().catch(err => console.error('Error closing client:', err));
