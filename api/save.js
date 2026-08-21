@@ -1,13 +1,11 @@
 import pg from 'pg';
 
 async function resolveSchemaName(client, req, body) {
-    // 1. الفحص المباشر من الـ Headers
     const headerSchema = req.headers['x-tenant-schema'] || req.headers['x-company-name'] || req.headers['tenant'];
     if (headerSchema && headerSchema.trim() !== '') {
         return sanitizeSchema(headerSchema);
     }
 
-    // 2. الفحص من كائن الـ Body والـ Nested Objects
     const d = body.debtData || body.debt || body.updates || body.data || body;
     const userObj = body.user || d.user || {};
     const companyObj = body.company || d.company || {};
@@ -22,7 +20,6 @@ async function resolveSchemaName(client, req, body) {
         return sanitizeSchema(rawCompany);
     }
 
-    // 3. الاستعلام من public.app_users لمطابقة جدول إنشاء الحساب
     const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'];
     if (userId) {
         try {
@@ -107,7 +104,6 @@ export default async function handler(req, res) {
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}", public;`);
 
-        // إنشاء وتحديث الأعمدة لضمان تطابقها تماماً مع جدول إنشاء الحساب
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id VARCHAR(255) PRIMARY KEY,
@@ -141,24 +137,88 @@ export default async function handler(req, res) {
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
         `);
 
-        let query = '';
-        let params = [];
-
         const isDeleteAction = ['DELETE', 'DELETE_DEBT', 'DELETE_DATA', 'REMOVE'].includes(action);
         const isFetchAction = ['GET', 'GET_DATA', 'FETCH', 'READ'].includes(action);
+        const isSyncAction = ['SYNC', 'SYNC_BATCH', 'BATCH_SAVE'].includes(action);
+
+        const cleanDate = (dateVal) => {
+            if (!dateVal || dateVal.toString().trim() === '' || dateVal.toString().includes('Invalid')) return null;
+            return dateVal;
+        };
+
+        const upsertQuery = `
+            INSERT INTO debts (
+                id, user_id, title, type, person_name, phone, amount, currency, due_date, 
+                notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO UPDATE SET
+                user_id = COALESCE(EXCLUDED.user_id, debts.user_id),
+                title = COALESCE(EXCLUDED.title, debts.title),
+                type = EXCLUDED.type,
+                person_name = EXCLUDED.person_name,
+                phone = EXCLUDED.phone,
+                amount = EXCLUDED.amount,
+                currency = EXCLUDED.currency,
+                due_date = EXCLUDED.due_date,
+                notes = EXCLUDED.notes,
+                status = EXCLUDED.status,
+                is_scheduled = EXCLUDED.is_scheduled,
+                schedule_type = EXCLUDED.schedule_type,
+                installments_count = EXCLUDED.installments_count,
+                first_payment_date = EXCLUDED.first_payment_date,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING *;
+        `;
 
         if (isDeleteAction) {
             if (!finalId) {
                 return res.status(400).json({ success: false, error: 'المعرف (id) مطلوب لإتمام عملية الحذف' });
             }
-            query = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
-            params = [finalId];
+            const result = await client.query(`DELETE FROM debts WHERE id = $1 RETURNING *;`, [finalId]);
+            return res.status(200).json({ success: true, schemaUsed: cleanSchema, rows: result.rows });
 
         } else if (isFetchAction) {
-            query = `SELECT * FROM debts ORDER BY created_at DESC;`;
-            params = [];
+            const result = await client.query(`SELECT * FROM debts ORDER BY created_at DESC;`);
+            return res.status(200).json({ success: true, schemaUsed: cleanSchema, rows: result.rows });
+
+        } else if (isSyncAction) {
+            // 💡 استقبال مصفوفة الأغراض التي خُزنت في الأندرويد أثناء قطع الإنترنت
+            const items = body.items || body.debts || d.items || [];
+            if (!Array.isArray(items) || items.length === 0) {
+                return res.status(400).json({ success: false, error: 'لم يتم إرسال أي عناصر لمزامنتها' });
+            }
+
+            await client.query('BEGIN');
+            const syncedRows = [];
+
+            for (const item of items) {
+                const activeId = item.id || item.debtId || item._id || `debt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                const personName = item.personName || item.person_name || 'غير محدد';
+                const title = item.title || item.notes || personName || 'دين جديد';
+                const type = item.type || 'owed_to_me';
+                const phone = item.phone || item.personPhone || null;
+                const amount = parseFloat(item.amount) || 0;
+                const currency = item.currency || 'DZD';
+                const notes = item.notes || null;
+                const status = item.status || 'pending';
+                const isScheduled = item.isScheduled !== undefined ? item.isScheduled : (item.is_scheduled || false);
+                const scheduleType = item.scheduleType || item.schedule_type || null;
+                const installmentsCount = parseInt(item.installmentsCount) || parseInt(item.installments_count) || 0;
+
+                const dueDate = cleanDate(item.dueDate || item.due_date);
+                const firstPaymentDate = cleanDate(item.firstPaymentDate || item.first_payment_date);
+                const createdAtVal = cleanDate(item.createdAt || item.created_at) || new Date().toISOString();
+
+                const params = [activeId, userId, title, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate, createdAtVal];
+                const resRow = await client.query(upsertQuery, params);
+                syncedRows.push(resRow.rows[0]);
+            }
+
+            await client.query('COMMIT');
+            return res.status(200).json({ success: true, schemaUsed: cleanSchema, syncedCount: syncedRows.length, rows: syncedRows });
 
         } else {
+            // 💡 حفظ عنصر واحد منفرد
             const activeId = finalId || `debt_${Date.now()}`;
             const personName = d.personName || d.person_name || d.person_Name || 'غير محدد';
             const title = d.title || d.notes || personName || 'دين جديد';
@@ -172,51 +232,25 @@ export default async function handler(req, res) {
             const scheduleType = d.scheduleType || d.schedule_type || null;
             const installmentsCount = parseInt(d.installmentsCount) || parseInt(d.installments_count) || 0;
 
-            const cleanDate = (dateVal) => {
-                if (!dateVal || dateVal.toString().trim() === '' || dateVal.toString().includes('Invalid')) return null;
-                return dateVal;
-            };
             const dueDate = cleanDate(d.dueDate || d.due_date);
             const firstPaymentDate = cleanDate(d.firstPaymentDate || d.first_payment_date);
             const createdAtVal = cleanDate(d.createdAt || d.created_at) || new Date().toISOString();
 
-            query = `
-                INSERT INTO debts (
-                    id, user_id, title, type, person_name, phone, amount, currency, due_date, 
-                    notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
-                ON CONFLICT (id) DO UPDATE SET
-                    user_id = COALESCE(EXCLUDED.user_id, debts.user_id),
-                    title = COALESCE(EXCLUDED.title, debts.title),
-                    type = EXCLUDED.type,
-                    person_name = EXCLUDED.person_name,
-                    phone = EXCLUDED.phone,
-                    amount = EXCLUDED.amount,
-                    currency = EXCLUDED.currency,
-                    due_date = EXCLUDED.due_date,
-                    notes = EXCLUDED.notes,
-                    status = EXCLUDED.status,
-                    is_scheduled = EXCLUDED.is_scheduled,
-                    schedule_type = EXCLUDED.schedule_type,
-                    installments_count = EXCLUDED.installments_count,
-                    first_payment_date = EXCLUDED.first_payment_date,
-                    updated_at = CURRENT_TIMESTAMP
-                RETURNING *;
-            `;
-            params = [activeId, userId, title, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate, createdAtVal];
+            const params = [activeId, userId, title, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate, createdAtVal];
+            const result = await client.query(upsertQuery, params);
+
+            return res.status(200).json({ 
+                success: true, 
+                schemaUsed: cleanSchema, 
+                rows: result.rows, 
+                debt: result.rows[0] || null
+            });
         }
 
-        const result = await client.query(query, params);
-
-        return res.status(200).json({ 
-            success: true, 
-            schemaUsed: cleanSchema, 
-            rows: result.rows, 
-            debt: result.rows[0] || null,
-            rowCount: result.rowCount 
-        });
-
     } catch (error) {
+        if (action === 'SYNC' || action === 'SYNC_BATCH') {
+            await client.query('ROLLBACK').catch(() => {});
+        }
         console.error(`[DATABASE ERROR]:`, error);
         return res.status(500).json({ success: false, error: error.message });
     } finally {
