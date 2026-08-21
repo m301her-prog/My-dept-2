@@ -56,6 +56,28 @@ export default function Auth() {
     return Object.keys(newErrors).length === 0;
   };
 
+  /**
+   * 💡 دالة إنشاء السكيمّا الخاصة بالشركة عند التسجيل
+   */
+  const initializeCompanySchema = async (companyName, userId) => {
+    try {
+      await fetch('/api/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-tenant-schema': `schema_${companyName.trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase()}`
+        },
+        body: JSON.stringify({
+          action: 'INIT_SCHEMA',
+          companyName: companyName,
+          userId: userId
+        })
+      });
+    } catch (err) {
+      console.error('فشل في تهيئة السكيمّا تلقائياً:', err);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -74,6 +96,11 @@ export default function Auth() {
           formData.phone,
           formData.companyName
         );
+
+        // 💡 استدعاء دالة إنشاء السكيمّا فور إتمام عملية التسجيل بنجاح
+        if (formData.companyName) {
+          await initializeCompanySchema(formData.companyName, loggedUser?.id || loggedUser?._id);
+        }
       }
 
       // 🛑 فحص حالة تعطيل الحساب من بيانات المستخدم
