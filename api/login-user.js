@@ -16,11 +16,15 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+    return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
 
   // 2. ضبط الاتصال بـ Postgres (Neon) مع تفعيل الـ SSLmode بشكل صحيح
   const baseConnectionString = process.env.DATABASE_URL || '';
+  if (!baseConnectionString) {
+    return res.status(500).json({ success: false, error: 'DATABASE_URL غير معرف في متغيرات البيئة' });
+  }
+
   const separator = baseConnectionString.includes('?') ? '&' : '?';
   const finalConnectionString = `${baseConnectionString}${separator}sslmode=verify-full`;
 
@@ -30,10 +34,20 @@ export default async function handler(req, res) {
   });
 
   try {
-    const { email, password } = req.body;
+    // معالجة الـ body في حال كان قادماً كـ JSON String من CapacitorHttp
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        console.error('Failed to parse body string:', e);
+      }
+    }
+
+    const { email, password } = body || {};
 
     if (!email || !password) {
-      return res.status(400).json({ error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' });
+      return res.status(400).json({ success: false, error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' });
     }
 
     const cleanEmail = email.toLowerCase().trim();
@@ -45,16 +59,22 @@ export default async function handler(req, res) {
     const result = await client.query(loginQuery, [cleanEmail]);
 
     if (result.rows.length === 0) {
-      return res.status(400).json({ error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' });
+      return res.status(400).json({ success: false, error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' });
     }
 
     const dbUser = result.rows[0];
 
-    if (dbUser.password !== password) {
-      return res.status(400).json({ error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' });
+    // التحقق من حالة الحساب
+    if (dbUser.active === false || dbUser.active === 'false') {
+      return res.status(403).json({ success: false, error: 'هذا الحساب معطل، يرجى التواصل مع الإدارة' });
     }
 
-    // 4. استخراج اسم الـ Schema وتنسيقه ليكون ببادئة schema_ مطابقاً للوحة Neon
+    // مطابقة كلمة المرور (يدعم كلمة المرور العادية أو الـ Hash القادم من الفرونت إند)
+    if (dbUser.password !== password) {
+      return res.status(400).json({ success: false, error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' });
+    }
+
+    // 4. استخراج اسم الـ Schema وتنسيقه ليكون ببادئة schema_
     const rawCompany = dbUser.company_name || '';
     let cleanCompany = rawCompany.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
@@ -64,26 +84,29 @@ export default async function handler(req, res) {
 
     const tenantSchema = cleanCompany ? `schema_${cleanCompany}` : 'public';
 
-    // 5. إرجاع البيانات بالأسماء المطلوبة للفرونت إند شاملة tenantSchema
+    // 5. إرجاع الاستجابة بتنسيق يطابق شروط الفرونت إند (إضافة success: true)
     return res.status(200).json({
+      success: true,
       message: 'تم تسجيل الدخول بنجاح',
-      tenantSchema: tenantSchema, // يُرجع مثلاً: schema_lil
+      tenantSchema: tenantSchema,
+      schemaName: tenantSchema,
       user: {
         id: dbUser.id,
         name: dbUser.name,
         companyName: dbUser.company_name || '',
+        company_name: dbUser.company_name || '',
         email: dbUser.email,
         phone: dbUser.phone || '',
         isAdmin: dbUser.is_admin === true || dbUser.is_admin === 'true',
+        is_admin: dbUser.is_admin === true || dbUser.is_admin === 'true',
         active: dbUser.active === true || dbUser.active === 'true'
       }
     });
 
   } catch (error) {
     console.error('Login API Error:', error);
-    return res.status(500).json({ error: 'حدث خطأ داخلي في الخادم، يرجى المحاولة لاحقاً' });
+    return res.status(500).json({ success: false, error: 'حدث خطأ داخلي في الخادم، يرجى المحاولة لاحقاً' });
   } finally {
-    // إغلاق الاتصال لضمان عدم استهلاك موارد قاعدة البيانات في البيئة السحابية
     await client.end().catch(err => console.error('Error closing client:', err));
   }
 }
