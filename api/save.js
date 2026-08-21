@@ -34,13 +34,14 @@ export default async function handler(req, res) {
     const rawAction = body.action || d.action || 'SAVE';
     const action = rawAction.toString().toUpperCase().trim();
 
-    const finalId = body.id || body.debtId || d.id || d._id;
+    // 💡 البحث عن id في كافة المواضع المحتملة
+    const finalId = body.id || body.debtId || body._id || d.id || d.debtId || d._id || null;
     const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
     const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
     let targetSchema = req.headers['x-tenant-schema'];
 
-    // 💡 دالة استخراج اسم السكيمّا المطابقة لملف التسجيل
+    // 💡 استخراج اسم السكيمّا المتوافق مع ملف التسجيل
     if (!targetSchema || targetSchema.trim() === '') {
         const sanitizedCompany = finalCompanyName ? finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
         const cleanUserId = userId ? userId.toString().trim().replace('usr_', '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
@@ -59,11 +60,9 @@ export default async function handler(req, res) {
     try {
         await client.connect();
         
-        // التوجه للسكيمّا المحددة
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
         
-        // التأكد من هيكل الجدول
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id TEXT PRIMARY KEY,
@@ -86,7 +85,6 @@ export default async function handler(req, res) {
             );
         `);
 
-        // إسقاط قيود NOT NULL لمنع توقف API
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN created_at DROP NOT NULL;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;`);
@@ -103,9 +101,22 @@ export default async function handler(req, res) {
         let query = '';
         let params = [];
 
-        const isSaveAction = ['SAVE', 'ADD', 'INSERT', 'UPDATE', 'ADD_DEBT', 'UPDATE_DEBT', 'SAVE_DATA', 'INIT_SCHEMA'].includes(action);
+        const isDeleteAction = ['DELETE', 'DELETE_DEBT', 'DELETE_DATA', 'REMOVE'].includes(action);
+        const isFetchAction = ['GET', 'GET_DATA', 'FETCH', 'READ'].includes(action);
 
-        if (isSaveAction) {
+        if (isDeleteAction) {
+            if (!finalId) {
+                return res.status(400).json({ success: false, error: 'المعرف (id) مطلوب لإتمام عملية الحذف' });
+            }
+            query = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
+            params = [finalId];
+
+        } else if (isFetchAction) {
+            query = `SELECT * FROM debts ORDER BY created_at DESC;`;
+            params = [];
+
+        } else {
+            // 💡 الافتراضي: الحفظ والأوامر الأخرى
             const activeId = finalId || `debt_${Date.now()}`;
             const personName = d.personName || d.person_name || d.person_Name || 'غير محدد';
             const title = d.title || d.notes || personName || 'دين جديد';
@@ -151,18 +162,6 @@ export default async function handler(req, res) {
                 RETURNING *;
             `;
             params = [activeId, userId, title, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate, createdAtVal];
-
-        } else if (['DELETE', 'DELETE_DEBT', 'DELETE_DATA'].includes(action)) {
-            if (!finalId) return res.status(400).json({ success: false, error: 'المعرف (id) مطلوب' });
-            query = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
-            params = [finalId];
-
-        } else if (['GET', 'GET_DATA', 'FETCH'].includes(action)) {
-            query = `SELECT * FROM debts ORDER BY created_at DESC;`;
-            params = [];
-
-        } else {
-            return res.status(400).json({ success: false, error: `العملية (${action}) غير مدعومة` });
         }
 
         const result = await client.query(query, params);
