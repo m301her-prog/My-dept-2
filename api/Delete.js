@@ -1,34 +1,24 @@
 import pg from 'pg';
 
-/**
- * مطابقة دالة استخراج وتنظيف السكيمّا مع كود إنشاء الحساب حرفياً
- */
 function buildSchemaName(companyName, userId) {
     if (companyName) {
         const strVal = typeof companyName === 'object' ? JSON.stringify(companyName) : String(companyName);
-        
-        // إذا كان الاسم يبدأ بـ schema_ جاهز
         if (strVal.trim().startsWith('schema_')) {
             return strVal.trim();
         }
-
         const sanitized = strVal.trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
         if (sanitized) {
             return `schema_${sanitized}`;
         }
     }
-
-    // الـ Fallback في حال كان اسم الشركة بالعربية أو رموز فقط
     if (userId) {
         const cleanUserId = String(userId).replace('usr_', '');
         return `schema_user_${cleanUserId}`;
     }
-
     return null;
 }
 
 async function resolveSchemaName(client, req, body, queryParams) {
-    // 1. الفحص من الـ Headers
     const headerSchema = req.headers['x-tenant-schema'] || req.headers['x-company-name'] || req.headers['tenant'];
     const userId = body.userId || body.user_id || queryParams.userId || req.headers['x-user-id'] || req.headers['user-id'];
 
@@ -36,7 +26,6 @@ async function resolveSchemaName(client, req, body, queryParams) {
         return buildSchemaName(headerSchema, userId);
     }
 
-    // 2. الفحص من الـ Body والـ Query Params
     const d = body.debtData || body.debt || body.updates || body.data || body;
     const userObj = body.user || d.user || {};
     const companyObj = body.company || d.company || {};
@@ -52,7 +41,6 @@ async function resolveSchemaName(client, req, body, queryParams) {
         return buildSchemaName(rawCompany, userId);
     }
 
-    // 3. الاستعلام المباشر من جدول public.app_users لاستخراج الشركة الأصلية
     if (userId) {
         try {
             const dbRes = await client.query(
@@ -67,7 +55,6 @@ async function resolveSchemaName(client, req, body, queryParams) {
         }
     }
 
-    // 4. إذا أُرسل userId فقط ولم نجد شركة، نعتمد سكيمّا المستخدم
     if (userId) {
         return buildSchemaName(null, userId);
     }
@@ -76,7 +63,6 @@ async function resolveSchemaName(client, req, body, queryParams) {
 }
 
 export default async function handler(req, res) {
-    // إعدادات CORS
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST,DELETE');
@@ -108,11 +94,10 @@ export default async function handler(req, res) {
     const queryParams = req.query || {};
     const d = body.debtData || body.debt || body.updates || body.data || body;
 
-    // استخراج معرّف الدين (id) أو اسم الشخص (personName)
-    const targetId = String(body.id || body.debtId || body._id || d.id || d.debtId || d._id || queryParams.id || '').trim();
+    const rawId = String(body.id || body.debtId || body._id || d.id || d.debtId || d._id || queryParams.id || '').trim();
     const targetName = String(body.personName || body.person_name || body.name || d.personName || d.person_name || queryParams.personName || '').trim();
 
-    if (!targetId && !targetName) {
+    if (!rawId && !targetName) {
         return res.status(400).json({
             success: false,
             error: 'يرجى إرسال المعرف (id) أو اسم الشخص (personName) المُراد حذفه.'
@@ -122,40 +107,57 @@ export default async function handler(req, res) {
     try {
         await client.connect();
 
-        // تحديد اسم السكيمّا بدقة
         const schemaName = await resolveSchemaName(client, req, body, queryParams);
 
         if (!schemaName) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'تعذر تحديد السكيمّا الخاصة بالحساب. يرجى إرسال companyName أو userId.',
-                debugData: { headers: req.headers, bodyKeys: Object.keys(body), queryParams }
+                error: 'تعذر تحديد السكيمّا الخاصة بالحساب. يرجى إرسال companyName أو userId.'
             });
         }
 
-        // ضبط المسار على السكيمّا المحددة
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
         await client.query(`SET search_path TO "${schemaName}", public;`);
 
-        let deleteQuery = '';
-        let params = [];
+        let result = { rowCount: 0, rows: [] };
 
-        if (targetId) {
-            deleteQuery = `DELETE FROM debts WHERE id::text = $1 OR id::text LIKE $2 RETURNING *;`;
-            params = [targetId, `%${targetId}%`];
-        } else {
-            deleteQuery = `DELETE FROM debts WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) RETURNING *;`;
-            params = [targetName];
+        // 1. محاولة الحذف المرن بواسطة ID (تتجاهل البادئات والمطابقة المباشرة)
+        if (rawId) {
+            const cleanId = rawId.replace(/^debt_/, '');
+            const deleteQuery = `
+                DELETE FROM debts 
+                WHERE id::text = $1 
+                   OR id::text = $2 
+                   OR id::text LIKE $3 
+                   OR REPLACE(id::text, 'debt_', '') = $4
+                RETURNING *;
+            `;
+            result = await client.query(deleteQuery, [rawId, `debt_${cleanId}`, `%${cleanId}%`, cleanId]);
         }
 
-        const result = await client.query(deleteQuery, params);
+        // 2. إذا فشل الحذف بواسطة ID وكان الاسم متوفراً، محاولة الحذف بالاسم
+        if (result.rowCount === 0 && targetName) {
+            const deleteByNameQuery = `
+                DELETE FROM debts 
+                WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) 
+                RETURNING *;
+            `;
+            result = await client.query(deleteByNameQuery, [targetName]);
+        }
 
+        // 3. في حال عدم العثور على العنصر إطلاقاً، إرجاع خطأ 404 مع كشف بأول 5 سجلات للمساعدة في التشخيص
         if (result.rowCount === 0) {
+            const sampleRes = await client.query(`SELECT id, person_name FROM debts LIMIT 5;`).catch(() => ({ rows: [] }));
+
             return res.status(404).json({
                 success: false,
-                message: `لم يتم العثور على الدين المراد حذفه في السكيمّا (${schemaName}).`,
-                searchedFor: { id: targetId, personName: targetName },
-                schemaNameUsed: schemaName
+                message: `لم يتم العثور على العنصر المراد حذفه في السكيمّا (${schemaName}).`,
+                debug: {
+                    searchedId: rawId,
+                    searchedName: targetName,
+                    schemaNameUsed: schemaName,
+                    sampleExistingRecords: sampleRes.rows
+                }
             });
         }
 
