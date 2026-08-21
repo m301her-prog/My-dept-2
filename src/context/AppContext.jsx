@@ -20,15 +20,14 @@ import neonService, {
   isNeonConfigured
 } from '../services/neonService.js';
 import { translations } from '../i18n/translations.jsx';
-import { LocalNotifications } from '@capacitor/local-notifications'; // 👈 استيراد حزمة الإشعارات المحلية للاندرو
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
   // Auth state
   const [user, setUser] = useState(() => {
-    const saved = loadFromLocalStorage('currentUser', null);
-    return saved;
+    return loadFromLocalStorage('currentUser', null);
   });
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     const saved = loadFromLocalStorage('currentUser', null);
@@ -57,49 +56,22 @@ export function AppProvider({ children }) {
     return loadFromLocalStorage('whatsappEnabled', true);
   });
 
-  // Data state - will be loaded from user-specific storage
+  // Data state
   const [debts, setDebts] = useState([]);
   const [users, setUsers] = useState([]);
 
-  // دالة موحدة سحابية لجلب البيانات فوراً (تم ضبط المسار لـ /api/get مع إرسال الـ companyName أيضاً إن وجد)
+  // دالة جلب الديون عبر خدمة neonService
   const syncDebtsFromServer = useCallback(async (userId) => {
     if (!userId) return;
     try {
-      // جلب اسم الشركة من الكائن المخزن محلياً لتمريره للمزامنة والباك إند بدقة
-      const currentUserData = loadFromLocalStorage('currentUser', null);
-      const companyParam = currentUserData?.companyName || currentUserData?.company_name ? `&companyName=${currentUserData.companyName || currentUserData.company_name}` : '';
-      
-      const response = await fetch(`https://nawh-ai25.vercel.app/api/get?userId=${userId}${companyParam}`);
-      if (response.ok) {
-        const data = await response.json();
-        const serverDebts = data.debts || data.rows || [];
-        
-        // معالجة البيانات القادمة من الباك إند لتوحيد مسميات الحقول
-        const normalizedDebts = serverDebts.map(d => ({
-          ...d,
-          personName: d.personName || d.person_name || d.name || '',
-          person_name: d.personName || d.person_name || d.name || '',
-          dueDate: d.dueDate || d.due_date || d.date || '',
-          due_date: d.dueDate || d.due_date || d.date || '',
-          isScheduled: d.isScheduled !== undefined ? d.isScheduled : d.is_scheduled,
-          is_scheduled: d.isScheduled !== undefined ? d.isScheduled : d.is_scheduled,
-          scheduleType: d.scheduleType || d.schedule_type || null,
-          schedule_type: d.scheduleType || d.schedule_type || null,
-          installmentsCount: d.installmentsCount !== undefined ? d.installmentsCount : d.installments_count,
-          installments_count: d.installmentsCount !== undefined ? d.installmentsCount : d.installments_count,
-          firstPaymentDate: d.firstPaymentDate || d.first_payment_date || null,
-          first_payment_date: d.firstPaymentDate || d.first_payment_date || null,
-        }));
-
-        setDebts(normalizedDebts);
-        saveToLocalStorage(`user_${userId}_debts`, normalizedDebts);
-        return;
-      }
+      const userDebts = await fetchDebts(userId);
+      setDebts(userDebts || []);
+      saveToLocalStorage(`user_${userId}_debts`, userDebts || []);
     } catch (err) {
-      console.error("خطأ أثناء جلب الديون من السيرفر السحابي:", err);
+      console.error("خطأ أثناء جلب الديون:", err);
+      const localDebts = loadFromLocalStorage(`user_${userId}_debts`, []);
+      setDebts(localDebts);
     }
-    const userDebts = fetchDebts(userId);
-    setDebts(userDebts);
   }, []);
 
   // Load debts when user changes
@@ -140,23 +112,13 @@ export function AppProvider({ children }) {
   const login = async (email, password) => {
     setLoading(true);
     try {
-      const response = await fetch('https://nawh-ai25.vercel.app/api/login-user', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
+      const serverUser = await authUser(email, password);
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'فشلت عملية تسجيل الدخول عبر الـ API');
+      if (!serverUser) {
+        throw new Error('بيانات الدخول غير صحيحة');
       }
 
-      const serverUser = data.user;
-
-      // 👈 تحقق صارم وشامل من حالة تعطيل الحساب لجميع الصيغ المحتملة القادمة من الباك إند
+      // تحقق من حالة تعطيل الحساب
       const isAccountSuspended = 
         serverUser.active === false || 
         serverUser.active === 'false' || 
@@ -174,27 +136,24 @@ export function AppProvider({ children }) {
         name: serverUser.name,
         email: serverUser.email,
         phone: serverUser.phone || '',
-        companyName: serverUser.companyName || serverUser.company_name || '', // حفظ حقل اسم الشركة هنا لضمان تمريره للعمليات
-        isAdmin: serverUser.isAdmin,
-        createdAt: new Date().toISOString()
+        companyName: serverUser.companyName || serverUser.company_name || '',
+        isAdmin: serverUser.isAdmin || email === 'admin@debts.dz',
+        createdAt: serverUser.createdAt || new Date().toISOString()
       };
 
       const localUsers = loadFromLocalStorage('registeredUsers', []);
       const existingUserIndex = localUsers.findIndex(u => u.email.toLowerCase() === email.toLowerCase().trim());
       
       if (existingUserIndex === -1) {
-        localUsers.push({ ...authenticatedUser, password: password });
+        localUsers.push({ ...authenticatedUser, password });
       } else {
-        localUsers[existingUserIndex] = { ...localUsers[existingUserIndex], ...authenticatedUser, password: password };
+        localUsers[existingUserIndex] = { ...localUsers[existingUserIndex], ...authenticatedUser, password };
       }
       saveToLocalStorage('registeredUsers', localUsers);
 
-      saveToLocalStorage(`user_${authenticatedUser.id}_debts`, loadFromLocalStorage(`user_${authenticatedUser.id}_debts`, []));
-      saveToLocalStorage(`user_${authenticatedUser.id}_activities`, loadFromLocalStorage(`user_${authenticatedUser.id}_activities`, []));
-
       setUser(authenticatedUser);
       setIsAuthenticated(true);
-      setIsAdmin(authenticatedUser.isAdmin || email === 'admin@debts.dz');
+      setIsAdmin(authenticatedUser.isAdmin);
       saveToLocalStorage('currentUser', authenticatedUser);
 
       triggerAndroidCapture('USER_LOGGED_IN', { userId: authenticatedUser.id, email: authenticatedUser.email });
@@ -211,63 +170,24 @@ export function AppProvider({ children }) {
   const register = async (name, email, password, phone, companyName) => {
     setLoading(true);
     try {
-      const response = await fetch('https://nawh-ai25.vercel.app/api/register-user', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name, email, password, phone, companyName }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'فشلت عملية إنشاء الحساب عبر الـ API');
-      }
-
-      const targetUserId = data.userId || data.id || (data.rows && data.rows[0]?.id) || 'usr_' + Date.now().toString(36);
-
-      // هنا دالة السكيمّا: تم تغيير البناء ليعتمد على اسم الشركة القادم من الواجهة بشكل آمن ونظيف
-      const cleanCompanyName = (companyName || 'company').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-      const schemaName = `schema_${cleanCompanyName}`;
-
-      // استدعاء رابط تهيئة وإنشاء السكيمّا مع تمرير المتغيرات بالشكل الصحيح للـ Proxy
-      try {
-        await fetch('https://nawh-ai25.vercel.app/api/query', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            schemaName: schemaName, // تمرير اسم السكيمّا هنا ليفهمه متغير schemaName بالباك اند
-            query: `CREATE TABLE IF NOT EXISTS debts (
-              id VARCHAR(50) PRIMARY KEY,
-              name VARCHAR(100) NOT NULL,
-              amount NUMERIC NOT NULL,
-              type VARCHAR(10) NOT NULL,
-              date VARCHAR(50) NOT NULL,
-              details TEXT,
-              status VARCHAR(20) DEFAULT 'pending'
-            );` // استعلام آمن لإنشاء جدول الديون مباشرة داخل سكيمّا الشركة الجديدة
-          }),
-        });
-      } catch (schemaErr) {
-        console.error("فشل إنشاء السكيمّا السحابية تلقائياً:", schemaErr);
-      }
-
-      const newUser = await registerUserAndCreateTables(name, email, password, phone, targetUserId);
+      // إرسال البيانات لدالة الخدمة المحلية للإنشاء وتهيئة السكيمّا بواسطة اسم الشركة
+      const newUser = await registerUserAndCreateTables(name, email, password, phone, companyName);
       
-      // حفظ اسم الشركة في الـ state المحلي للمستخدم الجديد
-      const updatedNewUser = { ...newUser, companyName: companyName };
-      
-      setUser(updatedNewUser);
+      const authenticatedUser = {
+        ...newUser,
+        companyName: companyName || newUser.companyName || '',
+        isAdmin: newUser?.isAdmin || false
+      };
+
+      setUser(authenticatedUser);
       setIsAuthenticated(true);
-      setIsAdmin(updatedNewUser.isAdmin || false);
-      saveToLocalStorage('currentUser', updatedNewUser);
+      setIsAdmin(authenticatedUser.isAdmin);
+      saveToLocalStorage('currentUser', authenticatedUser);
 
-      triggerAndroidCapture('USER_REGISTERED', { userId: updatedNewUser.id, email: updatedNewUser.email });
+      triggerAndroidCapture('USER_REGISTERED', { userId: authenticatedUser.id, email: authenticatedUser.email });
 
       showNotification(t('registerSuccess'), 'success');
+      return authenticatedUser;
     } catch (error) {
       showNotification(error.message, 'error');
       throw error;
@@ -289,38 +209,15 @@ export function AppProvider({ children }) {
     showNotification(t('logoutSuccess'), 'success');
   };
 
-  // تعديل الإضافة: تم ضبط الحفظ لإرسال الـ companyName لمنع خطأ 400 في الباك إند وتوجيه البيانات للسكيمّا الصحيحة
+  // الإضافة المحلية
   const handleAddDebt = async (debtData) => {
     setLoading(true);
     try {
       const newDebt = await addDebt(user.id, debtData);
       
-      // تنظيم الكائن لضمان إرسال الحقول بالصيغتين المتوقعتين للباك إند
-      const payloadDebt = {
-        ...newDebt,
-        person_name: newDebt.personName || newDebt.person_name,
-        due_date: newDebt.dueDate || newDebt.due_date,
-        is_scheduled: newDebt.isScheduled !== undefined ? newDebt.isScheduled : newDebt.is_scheduled,
-        schedule_type: newDebt.scheduleType || newDebt.schedule_type,
-        installments_count: newDebt.installmentsCount !== undefined ? newDebt.installmentsCount : newDebt.installments_count,
-        first_payment_date: newDebt.firstPaymentDate || newDebt.first_payment_date
-      };
-
-      // إجبار إرسال الـ Fetch والانتظار الصارم قبل تفعيل التحديث المحلي مع تمرير الـ companyName للباك اند
-      await fetch('https://nawh-ai25.vercel.app/api/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          userId: user.id, 
-          action: 'ADD', 
-          debt: payloadDebt,
-          companyName: user?.companyName || user?.company_name || '' // 👈 إرسال اسم الشركة
-        }),
-      });
-
-      setDebts(prev => [payloadDebt, ...prev]);
+      setDebts(prev => [newDebt, ...prev]);
       showNotification(t('debtAdded'), 'success');
-      return payloadDebt;
+      return newDebt;
     } catch (error) {
       showNotification(error.message, 'error');
       throw error;
@@ -329,43 +226,13 @@ export function AppProvider({ children }) {
     }
   };
 
-  // تعديل التحديث: تم ضبط التحديث ليمرر الـ companyName منعاً لتشتت السكيمّا السحابية
+  // التحديث المحلي
   const handleUpdateDebt = async (id, updates) => {
     setLoading(true);
     try {
-      // إعداد حقول التحديث لتتوافق مع الباك إند
-      const formattedUpdates = {
-        ...updates,
-        person_name: updates.personName || updates.person_name,
-        due_date: updates.dueDate || updates.due_date,
-        is_scheduled: updates.isScheduled !== undefined ? updates.isScheduled : updates.is_scheduled,
-        schedule_type: updates.scheduleType || updates.schedule_type,
-        installments_count: updates.installmentsCount !== undefined ? updates.installmentsCount : updates.installments_count,
-        first_payment_date: updates.firstPaymentDate || updates.first_payment_date
-      };
-
-      // تنفيذ الـ Fetch أولاً لضمان تحرك الرابط السحابي مع تمرير الـ companyName
-      await fetch('https://nawh-ai25.vercel.app/api/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          userId: user.id, 
-          action: 'UPDATE', 
-          debtId: id, 
-          updates: formattedUpdates,
-          companyName: user?.companyName || user?.company_name || '' // 👈 إرسال اسم الشركة
-        }),
-      });
-
       const updatedDebt = await updateDebtStatus(user.id, id, updates);
-      
-      // دمج الحقول محلياً لتحديث الـ state بشكل نظيف
-      const normalizedUpdatedDebt = {
-        ...updatedDebt,
-        ...formattedUpdates
-      };
 
-      setDebts(prev => prev.map(d => d.id === id ? normalizedUpdatedDebt : d));
+      setDebts(prev => prev.map(d => d.id === id ? { ...d, ...updatedDebt } : d));
       showNotification(t('debtUpdated'), 'success');
     } catch (error) {
       showNotification(error.message, 'error');
@@ -375,22 +242,10 @@ export function AppProvider({ children }) {
     }
   };
 
-  // تعديل الحذف: تم ضبط تمرير الـ companyName لطلب الحذف السحابي من السكيمّا المستهدفة
+  // الحذف المحلي
   const handleDeleteDebt = async (id) => {
     setLoading(true);
     try {
-      // إرسال طلب الحذف السحابي أولاً والانتظار مع تمرير الـ companyName
-      await fetch('https://nawh-ai25.vercel.app/api/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          userId: user.id, 
-          action: 'DELETE', 
-          debtId: id,
-          companyName: user?.companyName || user?.company_name || '' // 👈 إرسال اسم الشركة
-        }),
-      });
-
       await deleteDebt(user.id, id);
       setDebts(prev => prev.filter(d => d.id !== id));
       showNotification(t('debtDeleted'), 'success');
@@ -406,22 +261,11 @@ export function AppProvider({ children }) {
   const handleFetchUsers = async () => {
     setLoading(true);
     try {
-      // جلب جميع الحسابات من السيرفر مباشرة
-      const response = await fetch('https://nawh-ai25.vercel.app/api/get-users');
-      if (response.ok) {
-        const data = await response.json();
-        const cloudUsers = data.users || data.rows || [];
-        setUsers(cloudUsers);
-        saveToLocalStorage('registeredUsers', cloudUsers);
-      } else {
-        // Fallback في حال فشل الـ API
-        const allUsers = getAllUsers();
-        setUsers(allUsers);
-      }
+      const allUsers = await getAllUsers();
+      setUsers(allUsers || []);
+      saveToLocalStorage('registeredUsers', allUsers || []);
     } catch (error) {
-      console.error("خطأ في جلب الحسابات من قاعدة البيانات:", error);
-      const allUsers = getAllUsers();
-      setUsers(allUsers);
+      console.error("خطأ في جلب الحسابات:", error);
     } finally {
       setLoading(false);
     }
@@ -430,23 +274,11 @@ export function AppProvider({ children }) {
   const handleToggleUserStatus = async (userId, active) => {
     setLoading(true);
     try {
-      // 🛡️ تحويل صريح للقيمة لضمان عدم حدوث تضارب بين واجهة الـ Toggle ونوع البيانات المتوقع
       const isTrueActive = active === true || active === 'true' || active === 1 || active === '1';
 
-      // تحديث حالة الحساب سحابياً في قاعدة البيانات
-      const response = await fetch('https://nawh-ai25.vercel.app/api/update-user-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, active: isTrueActive }) // إرسال القيمة الصريحة والمحميّة
-      });
-
-      if (!response.ok) {
-        throw new Error('فشل تحديث حالة المستخدم على السيرفر');
-      }
-
-      // تحديث الحالة محلياً في الـ state والـ Local Storage
-      toggleUserStatus(userId, isTrueActive);
+      await toggleUserStatus(userId, isTrueActive);
       setUsers(prev => prev.map(u => u.id === userId ? { ...u, active: isTrueActive } : u));
+      
       triggerAndroidCapture('USER_STATUS_CHANGED', { userId, active: isTrueActive });
       showNotification(isTrueActive ? 'تم تفعيل الحساب بنجاح' : 'تم غلق الحساب بنجاح', 'success');
     } catch (error) {
@@ -459,18 +291,7 @@ export function AppProvider({ children }) {
   const handleDeleteUser = async (userId) => {
     setLoading(true);
     try {
-      // حذف الحساب سحابياً في قاعدة البيانات
-      const response = await fetch('https://nawh-ai25.vercel.app/api/delete-user', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId })
-      });
-
-      if (!response.ok) {
-        throw new Error('فشل حذف المستخدم من السيرفر');
-      }
-
-      deleteUser(userId);
+      await deleteUser(userId);
       setUsers(prev => prev.filter(u => u.id !== userId));
       showNotification('تم حذف الحساب بنجاح', 'success');
     } catch (error) {
@@ -503,7 +324,7 @@ export function AppProvider({ children }) {
     }
   }, [user, syncDebtsFromServer]);
 
-  // Request notification permission - تعديل جذري ليتوافق مع نظام أندرويد عبر كاباسيتور
+  // Request notification permission
   const requestNotificationPermission = async () => {
     try {
       let status = await LocalNotifications.checkPermissions();
@@ -517,7 +338,7 @@ export function AppProvider({ children }) {
     }
   };
 
-  // Send local notification - تعديل دالة الإرسال لتعمل محلياً على الهاتف
+  // Send local notification
   const sendNotification = async (title, body) => {
     if (notificationsEnabled) {
       try {
