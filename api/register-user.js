@@ -82,13 +82,40 @@ export default async function handler(req, res) {
 
     const createdAt = new Date().toISOString();
 
-    // 3. إنشاء اسم Schema فريد للشركة
-    const schemaName = `tenant_${userId}`;
+    // 💡 3. تنظيف اسم الشركة وإنشاء اسم Schema مخصص ببادئة schema_
+    const sanitizedCompany = finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+    
+    // في حال كُتب اسم الشركة بأحرف عربية أو رموز غير لاتينية فقط، نعتمد id كبديل لتفادي الأسماء الفارغة
+    const schemaName = sanitizedCompany 
+      ? `schema_${sanitizedCompany}` 
+      : `schema_user_${userId.replace('usr_', '')}`;
 
-    // 4. إنشاء الـ Schema الخاصة بالشركة
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
+    // 💡 4. إنشاء السكيمّا وتحديد المسار لبناء جدول الديون داخله
+    await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
+    await client.query(`SET search_path TO "${schemaName}";`);
 
-    // 5. إدراج الحساب الجديد في الجدول الرئيسي واسترجاع الحساب الذي تم إنشاؤه
+    // 💡 5. إنشاء جدول الديون تلقائياً داخل السكيمّا الجديدة عند تسجيل الحساب
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS debts (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        person_name TEXT NOT NULL,
+        phone TEXT,
+        amount NUMERIC NOT NULL,
+        currency TEXT DEFAULT 'DZD',
+        due_date DATE,
+        notes TEXT,
+        status TEXT DEFAULT 'pending',
+        is_scheduled BOOLEAN DEFAULT FALSE,
+        schedule_type TEXT,
+        installments_count INT DEFAULT 0,
+        first_payment_date DATE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 6. إدراج الحساب الجديد في الجدول الرئيسي واسترجاع الحساب الذي تم إنشاؤه
     const insertQuery = `
       INSERT INTO public.app_users (id, name, company_name, email, password, phone, is_admin, active, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -112,17 +139,15 @@ export default async function handler(req, res) {
 
     const createdUser = insertResult.rows[0];
 
-    // تجميع كائن المستخدم بالصيغتين (is_admin و isAdmin) للتوافق التام مع الواجهة الأمامية (Frontend)
     const formattedUser = {
       ...createdUser,
       companyName: createdUser.company_name,
       isAdmin: createdUser.is_admin
     };
 
-    // إرجاع كائن استجابة مكتمل يمنع تعليق "جاري الإنشاء..."
     return res.status(200).json({
       success: true,
-      message: 'تم إنشاء الحساب والـ Schema الخاصة به بنجاح',
+      message: 'تم إنشاء الحساب والـ Schema الخاصة بالشركة بنجاح',
       userId: userId,
       schemaName: schemaName,
       isAdmin: isAdmin,
