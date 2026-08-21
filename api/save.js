@@ -22,17 +22,16 @@ async function resolveSchemaName(client, req, body) {
         return sanitizeSchema(rawCompany);
     }
 
-    // 3. الاستعلام من قاعدة البيانات لجلب اسم شركة آخر جلسة/مستخدم عبر userId
+    // 3. الاستعلام من public.app_users لمطابقة جدول إنشاء الحساب
     const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'];
     if (userId) {
         try {
             const dbRes = await client.query(
-                `SELECT company_name, company_id, company FROM public.users WHERE id = $1 OR user_id = $1 LIMIT 1;`,
+                `SELECT company_name FROM public.app_users WHERE id = $1 LIMIT 1;`,
                 [userId]
             );
-            if (dbRes.rows.length > 0) {
-                const fetchedCompany = dbRes.rows[0].company_name || dbRes.rows[0].company_id || dbRes.rows[0].company;
-                if (fetchedCompany) return sanitizeSchema(fetchedCompany);
+            if (dbRes.rows.length > 0 && dbRes.rows[0].company_name) {
+                return sanitizeSchema(dbRes.rows[0].company_name, userId);
             }
         } catch (e) {
             console.warn('[SCHEMA RESOLUTION DB FALLBACK ERROR]:', e.message);
@@ -42,10 +41,16 @@ async function resolveSchemaName(client, req, body) {
     return null;
 }
 
-function sanitizeSchema(rawName) {
+function sanitizeSchema(rawName, fallbackUserId = null) {
     const strVal = typeof rawName === 'object' ? JSON.stringify(rawName) : String(rawName);
     const clean = strVal.trim().replace(/^usr_/, '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-    if (!clean) return null;
+    
+    if (!clean) {
+        if (fallbackUserId) {
+            return `schema_user_${fallbackUserId.toString().replace('usr_', '')}`;
+        }
+        return null;
+    }
     return clean.startsWith('schema_') ? clean : `schema_${clean}`;
 }
 
@@ -82,7 +87,6 @@ export default async function handler(req, res) {
     try {
         await client.connect();
 
-        // 💡 جلب السكيمّا تلقائياً بآلية الاستعلام الاحتياطي
         const cleanSchema = await resolveSchemaName(client, req, body);
 
         if (!cleanSchema) {
@@ -100,11 +104,10 @@ export default async function handler(req, res) {
         const finalId = body.id || body.debtId || body._id || d.id || d.debtId || d._id || null;
         const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
 
-        // 💡 1. إنشائها وتحديد مسار العمل
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}", public;`);
 
-        // 💡 2. إنشاء الهيكل وضمان وجود كافة الأعمدة للجدول الموجود مسبقاً
+        // إنشاء وتحديث الأعمدة لضمان تطابقها تماماً مع جدول إنشاء الحساب
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id VARCHAR(255) PRIMARY KEY,
@@ -126,12 +129,16 @@ export default async function handler(req, res) {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS user_id VARCHAR(255);
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS title TEXT;
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'DZD';
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN DEFAULT false;
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS schedule_type VARCHAR(50);
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS installments_count INT DEFAULT 0;
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS first_payment_date TIMESTAMP;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+            ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
         `);
 
         let query = '';
