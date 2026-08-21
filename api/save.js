@@ -40,7 +40,7 @@ export default async function handler(req, res) {
 
     let targetSchema = req.headers['x-tenant-schema'];
 
-    // 💡 مطابقة منطق كود التسجيل لاستخراج اسم السكيمّا بدقة
+    // 💡 دالة استخراج اسم السكيمّا المطابقة لملف التسجيل
     if (!targetSchema || targetSchema.trim() === '') {
         const sanitizedCompany = finalCompanyName ? finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
         const cleanUserId = userId ? userId.toString().trim().replace('usr_', '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
@@ -59,9 +59,11 @@ export default async function handler(req, res) {
     try {
         await client.connect();
         
+        // التوجه للسكيمّا المحددة
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
         
+        // التأكد من هيكل الجدول
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id TEXT PRIMARY KEY,
@@ -84,6 +86,7 @@ export default async function handler(req, res) {
             );
         `);
 
+        // إسقاط قيود NOT NULL لمنع توقف API
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN created_at DROP NOT NULL;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;`);
