@@ -98,8 +98,8 @@ const cloudApiRequest = async (url, method, data) => {
     if (response.status >= 200 && response.status < 300) {
       return response.data;
     } else {
-      console.warn(`Cloud API error ${response.status}: ${url}`);
-      return null;
+      console.warn(`Cloud API error ${response.status}: ${url}`, response.data);
+      return response.data || null;
     }
   } catch (error) {
     console.warn('Cloud API request failed:', error.message, url);
@@ -109,8 +109,6 @@ const cloudApiRequest = async (url, method, data) => {
 
 /**
  * Android Capture Event Trigger
- * Sends events to Android WebView when available
- * Also saves to localStorage for offline sync
  */
 export const triggerAndroidCapture = (eventType, data) => {
   const eventData = {
@@ -144,9 +142,6 @@ export const triggerAndroidCapture = (eventType, data) => {
   }));
 };
 
-/**
- * Save capture event to localStorage
- */
 const saveCaptureEvent = (eventData) => {
   try {
     const captureLog = JSON.parse(localStorage.getItem('captureLog') || '[]');
@@ -158,9 +153,6 @@ const saveCaptureEvent = (eventData) => {
   }
 };
 
-/**
- * Save data to localStorage
- */
 export const saveToLocalStorage = (key, data) => {
   try {
     localStorage.setItem(key, JSON.stringify(data));
@@ -170,9 +162,6 @@ export const saveToLocalStorage = (key, data) => {
   }
 };
 
-/**
- * Load data from localStorage
- */
 export const loadFromLocalStorage = (key, defaultValue = null) => {
   try {
     const data = localStorage.getItem(key);
@@ -207,7 +196,8 @@ const hashPassword = (password) => {
  * ============================================
  */
 
-export const registerUserAndCreateTables = async (name, email, password, phone) => {
+// تعديل الدالة لاستقبال companyName وإرسالها بالكامل للباك إند
+export const registerUserAndCreateTables = async (name, email, password, phone, companyName = '') => {
   const users = loadFromLocalStorage('registeredUsers', []);
 
   if (users.find(u => u.email === email)) {
@@ -217,6 +207,7 @@ export const registerUserAndCreateTables = async (name, email, password, phone) 
   const userId = generateUserId();
   const hashedPassword = hashPassword(password);
   const isAdmin = email === 'admin@debts.dz';
+  const cleanCompany = (companyName || '').trim();
 
   const newUser = {
     id: userId,
@@ -224,6 +215,7 @@ export const registerUserAndCreateTables = async (name, email, password, phone) 
     email,
     password: hashedPassword,
     phone: phone || '',
+    companyName: cleanCompany,
     active: true,
     isAdmin,
     createdAt: new Date().toISOString()
@@ -239,17 +231,21 @@ export const registerUserAndCreateTables = async (name, email, password, phone) 
   saveToLocalStorage(userActivitiesKey, []);
 
   try {
+    // إرسال حقل اسم الشركة بكل المسميات المحتملة لضمان توافق الباك إند
     const cloudResponse = await cloudApiRequest(CLOUD_API.registerUser, 'POST', {
       userId: userId,
       name: name,
       email: email,
       password: hashedPassword,
       phone: phone || '',
+      companyName: cleanCompany,
+      company_name: cleanCompany,
+      company: cleanCompany,
       isAdmin: isAdmin,
       createdAt: newUser.createdAt
     });
 
-    if (cloudResponse && cloudResponse.success) {
+    if (cloudResponse && (cloudResponse.success || cloudResponse.id || cloudResponse.user)) {
       console.log('User registered successfully to Cloud API:', userId);
 
       if (cloudResponse.user) {
@@ -308,12 +304,13 @@ export const registerUserAndCreateTables = async (name, email, password, phone) 
     }
   }
 
-  logUserActivity(userId, 'USER_REGISTERED', { name, email, phone });
+  logUserActivity(userId, 'USER_REGISTERED', { name, email, phone, companyName: cleanCompany });
 
   triggerAndroidCapture('USER_REGISTERED', {
     userId,
     name,
     email,
+    companyName: cleanCompany,
     timestamp: newUser.createdAt
   });
 
@@ -344,6 +341,7 @@ export const authUser = async (email, password) => {
           email: cloudUser.email,
           password: hashedPassword,
           phone: cloudUser.phone || '',
+          companyName: cloudUser.companyName || cloudUser.company_name || '',
           active: true,
           isAdmin: cloudUser.isAdmin || false,
           createdAt: cloudUser.createdAt,
@@ -635,10 +633,6 @@ export const updateDebtStatus = async (userId, debtId, updates) => {
   return updatedDebt;
 };
 
-/**
- * Direct Cloud API Delete Handler
- * Invokes https://my-dept-2.vercel.app/api/Delete
- */
 export const deleteDataFromCloud = async (id, companyName = '', userId = '') => {
   try {
     const payload = { id, companyName };
@@ -659,19 +653,14 @@ export const deleteDataFromCloud = async (id, companyName = '', userId = '') => 
   }
 };
 
-/**
- * Delete debt with Cloud API sync, Direct Delete endpoint, and Neon DB query
- */
 export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => {
   const targetUserId = userId || 'guest';
   const userDebtsKey = `user_${targetUserId}_debts`;
   const debts = loadFromLocalStorage(userDebtsKey, []);
 
-  // 1. Clear locally from LocalStorage across current user and all keys
   const filteredDebts = debts.filter(d => d.id !== debtId && d._id !== debtId);
   saveToLocalStorage(userDebtsKey, filteredDebts);
 
-  // Fallback cleanup across all localStorage keys for safety
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -687,10 +676,8 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
     console.warn('LocalStorage global cleanup warning:', err.message);
   }
 
-  // 2. Direct Delete API request (https://my-dept-2.vercel.app/api/Delete)
   const cloudDeleteResult = await deleteDataFromCloud(debtId, companyName, targetUserId);
 
-  // 3. Delete request through saveData fallback endpoint
   try {
     await cloudApiRequest(CLOUD_API.saveData, 'POST', {
       userId: targetUserId,
@@ -703,7 +690,6 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
     console.warn('Failed to sync debt deletion to Cloud API saveData:', error.message);
   }
 
-  // 4. Delete query directly on Neon database if connection is configured
   if (isNeonConfigured() && targetUserId !== 'guest') {
     try {
       const tableName = `user_${targetUserId.replace(/-/g, '_')}_debts`;
@@ -713,7 +699,6 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
     }
   }
 
-  // 5. Activity log and Android WebView capture
   logUserActivity(targetUserId, 'DEBT_DELETED', { debtId, companyName });
 
   triggerAndroidCapture('DEBT_DELETED', {
@@ -867,7 +852,7 @@ export const generateDebtReport = (userId, language = 'ar') => {
   const h = headers[language] || headers.ar;
 
   let report = `═══════════════════════════════════════════════════════════════\n`;
-  report += `                                     ${h.title}\n`;
+  report += `                                      ${h.title}\n`;
   report += `═══════════════════════════════════════════════════════════════\n\n`;
   report += `${h.date}: ${formatDate(new Date().toISOString())}\n`;
   report += `${h.user}: ${user?.name || user?.email || 'Unknown'}\n\n`;
@@ -882,7 +867,7 @@ export const generateDebtReport = (userId, language = 'ar') => {
 
   if (debts.length > 0) {
     report += `═══════════════════════════════════════════════════════════════\n`;
-    report += `                     ${language === 'ar' ? 'تفاصيل الديون' : language === 'fr' ? 'Details des dettes' : 'Debt Details'}\n`;
+    report += `                      ${language === 'ar' ? 'تفاصيل الديون' : language === 'fr' ? 'Details des dettes' : 'Debt Details'}\n`;
     report += `═══════════════════════════════════════════════════════════════\n\n`;
 
     debts.forEach((debt, index) => {
@@ -904,7 +889,7 @@ export const generateDebtReport = (userId, language = 'ar') => {
   }
 
   report += `═══════════════════════════════════════════════════════════════\n`;
-  report += `                Debts Manager - ${new Date().getFullYear()}\n`;
+  report += `                 Debts Manager - ${new Date().getFullYear()}\n`;
   report += `═══════════════════════════════════════════════════════════════\n`;
 
   return report;
@@ -1044,32 +1029,38 @@ export const getAllUsers = () => {
 
 export const toggleUserStatus = (userId, active) => {
   const users = loadFromLocalStorage('registeredUsers', []);
-  const updatedUsers = users.map(u =>
-    u.id === userId ? { ...u, active } : u
-  );
+  const updatedUsers = users.map(u => u.id === userId ? { ...u, active } : u);
   saveToLocalStorage('registeredUsers', updatedUsers);
-
-  cloudApiRequest(CLOUD_API.saveData, 'POST', {
-    action: 'toggle_user_status',
-    userId: userId,
-    active: active
-  }).catch(err => console.warn('Failed to sync user status:', err.message));
-
-  triggerAndroidCapture('USER_STATUS_CHANGED', { userId, active });
 };
 
 export const deleteUser = (userId) => {
   const users = loadFromLocalStorage('registeredUsers', []);
-  const filtered = users.filter(u => u.id !== userId);
-  saveToLocalStorage('registeredUsers', filtered);
-
-  localStorage.removeItem(`user_${userId}_debts`);
-  localStorage.removeItem(`user_${userId}_activities`);
-
-  cloudApiRequest(CLOUD_API.saveData, 'POST', {
-    action: 'delete_user',
-    userId: userId
-  }).catch(err => console.warn('Failed to sync user deletion:', err.message));
-
-  triggerAndroidCapture('USER_DELETED', { userId });
+  const filteredUsers = users.filter(u => u.id !== userId);
+  saveToLocalStorage('registeredUsers', filteredUsers);
 };
+
+const neonService = {
+  isNeonConfigured,
+  triggerAndroidCapture,
+  saveToLocalStorage,
+  loadFromLocalStorage,
+  registerUserAndCreateTables,
+  authUser,
+  logoutUser,
+  getUserById,
+  fetchDebts,
+  addDebt,
+  updateDebtStatus,
+  deleteDebt,
+  deleteDataFromCloud,
+  calculateStatistics,
+  downloadReport,
+  logUserActivity,
+  getUserActivities,
+  getAdminStats,
+  getAllUsers,
+  toggleUserStatus,
+  deleteUser
+};
+
+export default neonService;
