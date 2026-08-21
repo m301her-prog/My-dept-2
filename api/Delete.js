@@ -1,7 +1,6 @@
 import pg from 'pg';
 
 export default async function handler(req, res) {
-    // 1. السماح بطلبات CORS والتحقق من طريقة الطلب
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST,DELETE');
@@ -33,7 +32,6 @@ export default async function handler(req, res) {
 
         const queryParams = req.query || {};
 
-        // استخراج البيانات المراد حذفها ومعلومات الحساب
         const debtId = body.id || body.debtId || queryParams.id;
         const personName = body.personName || body.person_name || queryParams.personName;
         
@@ -50,8 +48,8 @@ export default async function handler(req, res) {
         let targetCompanyName = companyName;
         let targetUserId = userId;
 
-        // 💡 نفس منطق التسجيل: إذا لم يصل اسم الشركة، نستعلم عنه من public.app_users باستخدام userId أو email
-        if (!targetCompanyName && (targetUserId || email)) {
+        // جلب بيانات الحساب من الجدول الرئيسي إذا كان أحد البيانات ناقصاً
+        if ((!targetCompanyName || !targetUserId) && (targetUserId || email)) {
             const userQuery = targetUserId 
                 ? 'SELECT company_name, id FROM public.app_users WHERE id = $1 LIMIT 1'
                 : 'SELECT company_name, id FROM public.app_users WHERE LOWER(email) = LOWER($1) LIMIT 1';
@@ -70,44 +68,76 @@ export default async function handler(req, res) {
             });
         }
 
-        // 💡 نفس الخوارزمية المستخدمة في كود إنشاء الحساب تماماً
+        // بناء قائمة بالـ Schemas المحتملة (الشركة + المستخدم)
         const sanitizedCompany = targetCompanyName 
             ? targetCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() 
             : '';
 
-        const schemaName = sanitizedCompany 
-            ? `schema_${sanitizedCompany}` 
-            : `schema_user_${String(targetUserId).replace('usr_', '')}`;
-
-        // التبديل إلى الـ Schema المطلوبة
-        await client.query(`SET search_path TO "${schemaName}";`);
-
-        // تنفيذ عملية الحذف بالـ ID أو باسم الشخص
-        let deleteResult;
-        if (debtId) {
-            deleteResult = await client.query(
-                `DELETE FROM debts WHERE id::text = $1 OR id::text = $2 RETURNING *;`,
-                [String(debtId), `debt_${String(debtId).replace(/^debt_/, '')}`]
-            );
-        } else {
-            deleteResult = await client.query(
-                `DELETE FROM debts WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) RETURNING *;`,
-                [String(personName)]
-            );
+        const candidateSchemas = [];
+        if (sanitizedCompany) {
+            candidateSchemas.push(`schema_${sanitizedCompany}`);
+        }
+        if (targetUserId) {
+            candidateSchemas.push(`schema_user_${String(targetUserId).replace('usr_', '')}`);
         }
 
+        let deleteResult = { rowCount: 0, rows: [] };
+        let successfulSchema = '';
+
+        // التجربة في الـ Schemas المتاحة لضمان عدم حدوث 404 بسبب اختلاف الاسم
+        for (const currentSchema of candidateSchemas) {
+            try {
+                await client.query(`SET search_path TO "${currentSchema}";`);
+
+                const cleanId = debtId ? String(debtId).trim() : '';
+                const rawIdWithoutPrefix = cleanId.replace(/^debt_/, '');
+
+                if (cleanId) {
+                    deleteResult = await client.query(
+                        `DELETE FROM debts 
+                         WHERE id::text = $1 
+                            OR id::text = $2 
+                            OR id::text LIKE $3 
+                            OR REPLACE(id::text, 'debt_', '') = $4
+                         RETURNING *;`,
+                        [cleanId, `debt_${rawIdWithoutPrefix}`, `%${rawIdWithoutPrefix}%`, rawIdWithoutPrefix]
+                    );
+                }
+
+                if (deleteResult.rowCount === 0 && personName) {
+                    deleteResult = await client.query(
+                        `DELETE FROM debts WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) RETURNING *;`,
+                        [String(personName).trim()]
+                    );
+                }
+
+                if (deleteResult.rowCount > 0) {
+                    successfulSchema = currentSchema;
+                    break;
+                }
+            } catch (err) {
+                // تجاهل خطأ عدم وجود السكيمّا والانتقال للتالية
+            }
+        }
+
+        // في حال عدم العثور على السجل في أي سكيمّا، إرجاع تشخيص واضح
         if (deleteResult.rowCount === 0) {
+            const primarySchema = candidateSchemas[0] || 'unknown';
+            await client.query(`SET search_path TO "${primarySchema}";`).catch(() => {});
+            const sampleRows = await client.query(`SELECT id, person_name FROM debts LIMIT 3;`).catch(() => ({ rows: [] }));
+
             return res.status(404).json({
                 error: 'لم يتم العثور على الدين المراد حذفه',
-                schemaNameUsed: schemaName,
-                searchedFor: { debtId, personName }
+                schemasChecked: candidateSchemas,
+                searchedFor: { debtId, personName },
+                existingSamplesInDb: sampleRows.rows
             });
         }
 
         return res.status(200).json({
             success: true,
             message: 'تم حذف الدين بنجاح',
-            schemaName: schemaName,
+            schemaName: successfulSchema,
             deletedRecord: deleteResult.rows[0]
         });
 
