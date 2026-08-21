@@ -107,66 +107,96 @@ export default async function handler(req, res) {
     try {
         await client.connect();
 
-        const schemaName = await resolveSchemaName(client, req, body, queryParams);
+        let primarySchema = await resolveSchemaName(client, req, body, queryParams);
+        const userId = body.userId || body.user_id || queryParams.userId || req.headers['x-user-id'] || req.headers['user-id'];
 
-        if (!schemaName) {
+        // قائمة السكيمّات المقترحة للبحث فيها بالترتيب (الأساسية -> سكيمّا المستخدم fallback)
+        let schemasToTry = [];
+        if (primarySchema) schemasToTry.push(primarySchema);
+        if (userId) {
+            const userFallbackSchema = buildSchemaName(null, userId);
+            if (userFallbackSchema && !schemasToTry.includes(userFallbackSchema)) {
+                schemasToTry.push(userFallbackSchema);
+            }
+        }
+
+        if (schemasToTry.length === 0) {
             return res.status(400).json({ 
                 success: false, 
                 error: 'تعذر تحديد السكيمّا الخاصة بالحساب. يرجى إرسال companyName أو userId.'
             });
         }
 
-        await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
-        await client.query(`SET search_path TO "${schemaName}", public;`);
+        const cleanId = rawId.replace(/^debt_/, '');
+        let deletedRows = [];
+        let usedSchema = '';
 
-        let result = { rowCount: 0, rows: [] };
+        // المحاولة في السكيمّات المعرفة
+        for (const schema of schemasToTry) {
+            try {
+                await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}";`);
+                await client.query(`SET search_path TO "${schema}", public;`);
 
-        // 1. محاولة الحذف المرن بواسطة ID (تتجاهل البادئات والمطابقة المباشرة)
-        if (rawId) {
-            const cleanId = rawId.replace(/^debt_/, '');
-            const deleteQuery = `
-                DELETE FROM debts 
-                WHERE id::text = $1 
-                   OR id::text = $2 
-                   OR id::text LIKE $3 
-                   OR REPLACE(id::text, 'debt_', '') = $4
-                RETURNING *;
-            `;
-            result = await client.query(deleteQuery, [rawId, `debt_${cleanId}`, `%${cleanId}%`, cleanId]);
-        }
+                let result = { rowCount: 0, rows: [] };
 
-        // 2. إذا فشل الحذف بواسطة ID وكان الاسم متوفراً، محاولة الحذف بالاسم
-        if (result.rowCount === 0 && targetName) {
-            const deleteByNameQuery = `
-                DELETE FROM debts 
-                WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) 
-                RETURNING *;
-            `;
-            result = await client.query(deleteByNameQuery, [targetName]);
-        }
-
-        // 3. في حال عدم العثور على العنصر إطلاقاً، إرجاع خطأ 404 مع كشف بأول 5 سجلات للمساعدة في التشخيص
-        if (result.rowCount === 0) {
-            const sampleRes = await client.query(`SELECT id, person_name FROM debts LIMIT 5;`).catch(() => ({ rows: [] }));
-
-            return res.status(404).json({
-                success: false,
-                message: `لم يتم العثور على العنصر المراد حذفه في السكيمّا (${schemaName}).`,
-                debug: {
-                    searchedId: rawId,
-                    searchedName: targetName,
-                    schemaNameUsed: schemaName,
-                    sampleExistingRecords: sampleRes.rows
+                // 1. الحذف باستخدام ID
+                if (rawId) {
+                    const deleteQuery = `
+                        DELETE FROM debts 
+                        WHERE id::text = $1 
+                           OR id::text = $2 
+                           OR id::text LIKE $3 
+                           OR REPLACE(id::text, 'debt_', '') = $4
+                        RETURNING *;
+                    `;
+                    result = await client.query(deleteQuery, [rawId, `debt_${cleanId}`, `%${cleanId}%`, cleanId]);
                 }
+
+                // 2. الحذف باسم الشخص كبديل عند إرسال الاسم
+                if (result.rowCount === 0 && targetName) {
+                    const deleteByNameQuery = `
+                        DELETE FROM debts 
+                        WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) 
+                        RETURNING *;
+                    `;
+                    result = await client.query(deleteByNameQuery, [targetName]);
+                }
+
+                if (result.rowCount > 0) {
+                    deletedRows = result.rows;
+                    usedSchema = schema;
+                    break;
+                }
+            } catch (err) {
+                console.warn(`[SEARCH FAILED IN SCHEMA ${schema}]:`, err.message);
+            }
+        }
+
+        // إذا عُثر على السجل وتم حذفه
+        if (deletedRows.length > 0) {
+            return res.status(200).json({
+                success: true,
+                message: 'تم حذف الدين بنجاح من قاعدة البيانات',
+                schemaNameUsed: usedSchema,
+                deletedCount: deletedRows.length,
+                deletedRows: deletedRows
             });
         }
 
-        return res.status(200).json({
-            success: true,
-            message: 'تم حذف الدين بنجاح من قاعدة البيانات',
-            schemaNameUsed: schemaName,
-            deletedCount: result.rowCount,
-            deletedRows: result.rows
+        // في حال استمرار الـ 404: جلب السكيمّات والعينات المتاحة لتسهيل التتبع
+        const currentSchema = schemasToTry[0];
+        await client.query(`SET search_path TO "${currentSchema}", public;`);
+        const sampleRecords = await client.query(`SELECT id, person_name FROM debts LIMIT 5;`).catch(() => ({ rows: [] }));
+
+        return res.status(404).json({
+            success: false,
+            message: `لم يتم العثور على العنصر المراد حذفه في السكيمّا (${currentSchema}).`,
+            debug: {
+                searchedId: rawId,
+                searchedName: targetName,
+                schemasChecked: schemasToTry,
+                existingRecordsInSchema: sampleRecords.rows
+            }
         });
 
     } catch (error) {
