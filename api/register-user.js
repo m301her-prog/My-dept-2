@@ -73,26 +73,6 @@ export default async function handler(req, res) {
     const userId = 'usr_' + Math.random().toString(36).substring(2, 11);
 
     // =========================================================
-    // إنشاء اسم السكيمّا بناءً على اسم الشركة (مع تنظيف وتطهير الاسم)
-    // =========================================================
-    // تحويل اسم الشركة لحروف صغيرة واستبدال المسافات والرموز بـ _
-    let sanitizedCompany = finalCompanyName
-      .toString()
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_]/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_+|_+$/g, '');
-
-    // إذا كان اسم الشركة بالعربي أو رموز فقط، يتم الدمج مع الـ userId للحفاظ على فرادتها وصحتها في Postgres
-    let rawSchemaName = sanitizedCompany
-      ? `company_${sanitizedCompany}`
-      : `company_${userId}`;
-
-    // إضافة الـ userId كـ suffix أخير لمنع تصادفات الأسماء بين شركات تحمل نفس الاسم
-    const schemaName = `${rawSchemaName}_${userId.replace('usr_', '')}`;
-
-    // =========================================================
     // تحديد صلاحية الأدمن بشكل آمن يمنع توقف السيرفر
     // =========================================================
     const isAdmin = cleanEmail === 'nawh@nawh.com' || (name && name.toString().trim() === 'admin301');
@@ -102,10 +82,13 @@ export default async function handler(req, res) {
 
     const createdAt = new Date().toISOString();
 
-    // 3. إنشاء الـ Schema الخاصة بالشركة باستخدام quote_ident لمنع SQL Injection
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${pg.Client.prototype.escapeIdentifier(schemaName)}`);
+    // 3. إنشاء اسم Schema فريد للشركة
+    const schemaName = `tenant_${userId}`;
 
-    // 4. إدراج الحساب الجديد في الجدول الرئيسي واسترجاع الحساب الذي تم إنشاؤه
+    // 4. إنشاء الـ Schema الخاصة بالشركة
+    await client.query(`CREATE SCHEMA IF NOT EXISTS ${schemaName}`);
+
+    // 5. إدراج الحساب الجديد في الجدول الرئيسي واسترجاع الحساب الذي تم إنشاؤه
     const insertQuery = `
       INSERT INTO public.app_users (id, name, company_name, email, password, phone, is_admin, active, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -133,14 +116,13 @@ export default async function handler(req, res) {
     const formattedUser = {
       ...createdUser,
       companyName: createdUser.company_name,
-      isAdmin: createdUser.is_admin,
-      schemaName: schemaName
+      isAdmin: createdUser.is_admin
     };
 
-    // إرجاع كائن استجابة مكتمل
+    // إرجاع كائن استجابة مكتمل يمنع تعليق "جاري الإنشاء..."
     return res.status(200).json({
       success: true,
-      message: 'تم إنشاء الحساب والـ Schema الخاصة بالشركة بنجاح',
+      message: 'تم إنشاء الحساب والـ Schema الخاصة به بنجاح',
       userId: userId,
       schemaName: schemaName,
       isAdmin: isAdmin,
