@@ -261,6 +261,7 @@ export const registerUserAndCreateTables = async (name, email, password, phone, 
           type VARCHAR(20) NOT NULL,
           person_name TEXT NOT NULL,
           phone TEXT,
+          company_name TEXT,
           amount DECIMAL(12,2) NOT NULL,
           currency VARCHAR(10) DEFAULT 'DZD',
           due_date DATE NOT NULL,
@@ -449,8 +450,13 @@ export const fetchDebts = (userId) => {
 
 const fetchDebtsFromCloud = async (userId) => {
   try {
+    const user = getUserById(userId);
+    const companyName = user?.companyName || '';
+
     const cloudResponse = await cloudApiRequest(CLOUD_API.getData, 'POST', {
-      userId: userId
+      userId: userId,
+      companyName: companyName,
+      company_name: companyName
     });
 
     if (cloudResponse && cloudResponse.success && cloudResponse.debts) {
@@ -490,14 +496,18 @@ const fetchDebtsFromCloud = async (userId) => {
   }
 };
 
-export const addDebt = async (userId, debtData) => {
+export const addDebt = async (userId, debtData, companyName = '') => {
   const userDebtsKey = `user_${userId}_debts`;
   const debts = loadFromLocalStorage(userDebtsKey, []);
+  
+  const user = getUserById(userId);
+  const resolvedCompanyName = companyName || debtData.companyName || user?.companyName || '';
 
   const newDebt = {
     id: generateDebtId(),
     type: debtData.type,
     personName: debtData.personName,
+    companyName: resolvedCompanyName,
     phone: debtData.phone || '',
     amount: parseFloat(debtData.amount),
     currency: debtData.currency || 'DZD',
@@ -521,6 +531,8 @@ export const addDebt = async (userId, debtData) => {
   try {
     const cloudResponse = await cloudApiRequest(CLOUD_API.saveData, 'POST', {
       userId: userId,
+      companyName: resolvedCompanyName,
+      company_name: resolvedCompanyName,
       action: 'add_debt',
       debt: newDebt
     });
@@ -544,6 +556,7 @@ export const addDebt = async (userId, debtData) => {
   logUserActivity(userId, 'DEBT_ADDED', {
     debtId: newDebt.id,
     personName: newDebt.personName,
+    companyName: resolvedCompanyName,
     amount: newDebt.amount,
     isScheduled: newDebt.isScheduled
   });
@@ -557,11 +570,11 @@ export const addDebt = async (userId, debtData) => {
     try {
       const tableName = `user_${userId.replace(/-/g, '_')}_debts`;
       await executeQuery(`
-        INSERT INTO ${tableName} (id, type, person_name, phone, amount, currency, due_date, notes, status, paid_amount, is_scheduled, schedule_type, installments_count, installments_paid, first_payment_date, schedule_data)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        INSERT INTO ${tableName} (id, type, person_name, phone, company_name, amount, currency, due_date, notes, status, paid_amount, is_scheduled, schedule_type, installments_count, installments_paid, first_payment_date, schedule_data)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       `, [
         newDebt.id, newDebt.type, newDebt.personName, newDebt.phone,
-        newDebt.amount, newDebt.currency, newDebt.dueDate,
+        newDebt.companyName, newDebt.amount, newDebt.currency, newDebt.dueDate,
         newDebt.notes, newDebt.status, newDebt.paidAmount,
         newDebt.isScheduled, newDebt.scheduleType, newDebt.installmentsCount,
         newDebt.installmentsPaid, newDebt.firstPaymentDate,
@@ -575,7 +588,7 @@ export const addDebt = async (userId, debtData) => {
   return newDebt;
 };
 
-export const updateDebtStatus = async (userId, debtId, updates) => {
+export const updateDebtStatus = async (userId, debtId, updates, companyName = '') => {
   const userDebtsKey = `user_${userId}_debts`;
   const debts = loadFromLocalStorage(userDebtsKey, []);
 
@@ -584,9 +597,13 @@ export const updateDebtStatus = async (userId, debtId, updates) => {
     throw new Error('الدين غير موجود / Dette introuvable / Debt not found');
   }
 
+  const user = getUserById(userId);
+  const resolvedCompanyName = companyName || updates.companyName || debts[debtIndex].companyName || user?.companyName || '';
+
   const updatedDebt = {
     ...debts[debtIndex],
     ...updates,
+    companyName: resolvedCompanyName,
     updatedAt: new Date().toISOString()
   };
 
@@ -596,6 +613,8 @@ export const updateDebtStatus = async (userId, debtId, updates) => {
   try {
     const cloudResponse = await cloudApiRequest(CLOUD_API.saveData, 'POST', {
       userId: userId,
+      companyName: resolvedCompanyName,
+      company_name: resolvedCompanyName,
       action: 'update_debt',
       debtId: debtId,
       updates: updatedDebt
@@ -610,6 +629,7 @@ export const updateDebtStatus = async (userId, debtId, updates) => {
 
   logUserActivity(userId, 'DEBT_UPDATED', {
     debtId,
+    companyName: resolvedCompanyName,
     updates: Object.keys(updates).join(', ')
   });
 
@@ -624,7 +644,7 @@ export const updateDebtStatus = async (userId, debtId, updates) => {
 
 export const deleteDataFromCloud = async (id, companyName = '', userId = '') => {
   try {
-    const payload = { id, companyName };
+    const payload = { id, companyName, company_name: companyName };
     if (userId) payload.userId = userId;
 
     const response = await cloudApiRequest(CLOUD_API.deleteData, 'POST', payload);
@@ -644,6 +664,9 @@ export const deleteDataFromCloud = async (id, companyName = '', userId = '') => 
 
 export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => {
   const targetUserId = userId || 'guest';
+  const user = getUserById(targetUserId);
+  const resolvedCompanyName = companyName || user?.companyName || '';
+
   const userDebtsKey = `user_${targetUserId}_debts`;
   const debts = loadFromLocalStorage(userDebtsKey, []);
 
@@ -665,7 +688,7 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
     console.warn('LocalStorage global cleanup warning:', err.message);
   }
 
-  const cloudDeleteResult = await deleteDataFromCloud(debtId, companyName, targetUserId);
+  const cloudDeleteResult = await deleteDataFromCloud(debtId, resolvedCompanyName, targetUserId);
 
   try {
     await cloudApiRequest(CLOUD_API.saveData, 'POST', {
@@ -673,7 +696,8 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
       action: 'delete_debt',
       debtId: debtId,
       id: debtId,
-      companyName: companyName
+      companyName: resolvedCompanyName,
+      company_name: resolvedCompanyName
     });
   } catch (error) {
     console.warn('Failed to sync debt deletion to Cloud API saveData:', error.message);
@@ -688,12 +712,12 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
     }
   }
 
-  logUserActivity(targetUserId, 'DEBT_DELETED', { debtId, companyName });
+  logUserActivity(targetUserId, 'DEBT_DELETED', { debtId, companyName: resolvedCompanyName });
 
   triggerAndroidCapture('DEBT_DELETED', {
     userId: targetUserId,
     debtId,
-    companyName
+    companyName: resolvedCompanyName
   });
 
   return cloudDeleteResult || { success: true, debtId };
@@ -780,6 +804,7 @@ export const generateDebtReport = (userId, language = 'ar') => {
       title: 'تقرير الديون',
       date: 'تاريخ التقرير',
       user: 'المستخدم',
+      company: 'الشركة',
       totalOwed: 'إجمالي المستحق لي',
       totalOwe: 'إجمالي المتوجب عليّ',
       paid: 'مدفوعة',
@@ -800,6 +825,7 @@ export const generateDebtReport = (userId, language = 'ar') => {
       title: 'Rapport des dettes',
       date: 'Date du rapport',
       user: 'Utilisateur',
+      company: 'Entreprise',
       totalOwed: 'Total a recevoir',
       totalOwe: 'Total a payer',
       paid: 'Payees',
@@ -820,6 +846,7 @@ export const generateDebtReport = (userId, language = 'ar') => {
       title: 'Debts Report',
       date: 'Report Date',
       user: 'User',
+      company: 'Company',
       totalOwed: 'Total Owed to Me',
       totalOwe: 'Total I Owe',
       paid: 'Paid',
@@ -844,8 +871,11 @@ export const generateDebtReport = (userId, language = 'ar') => {
   report += `                                      ${h.title}\n`;
   report += `═══════════════════════════════════════════════════════════════\n\n`;
   report += `${h.date}: ${formatDate(new Date().toISOString())}\n`;
-  report += `${h.user}: ${user?.name || user?.email || 'Unknown'}\n\n`;
-  report += `───────────────────────────────────────────────────────────────\n`;
+  report += `${h.user}: ${user?.name || user?.email || 'Unknown'}\n`;
+  if (user?.companyName) {
+    report += `${h.company}: ${user.companyName}\n`;
+  }
+  report += `\n───────────────────────────────────────────────────────────────\n`;
   report += `                         ${language === 'ar' ? 'الملخص' : language === 'fr' ? 'Resume' : 'Summary'}\n`;
   report += `───────────────────────────────────────────────────────────────\n`;
   report += `${h.totalOwed}: ${formatCurrency(stats.totalOwedToMe)}\n`;
@@ -864,6 +894,9 @@ export const generateDebtReport = (userId, language = 'ar') => {
       report += `${index + 1}. ${debt.personName}\n`;
       report += `───────────────────────────────────────────────────────────────\n`;
       report += `   ${h.type}: ${debt.type === 'owed_to_me' ? h.owedToMe : h.iOwe}\n`;
+      if (debt.companyName) {
+        report += `   ${h.company}: ${debt.companyName}\n`;
+      }
       report += `   ${h.amount}: ${formatCurrency(debt.amount)} (${debt.currency})\n`;
       report += `   ${h.dueDate}: ${formatDate(debt.dueDate)}\n`;
       report += `   ${h.status}: ${debt.status === 'paid' ? h.paid : debt.status === 'pending' ? h.pending : h.overdue}\n`;
@@ -887,9 +920,10 @@ export const generateDebtReport = (userId, language = 'ar') => {
 export const exportDebtsAsCSV = (userId) => {
   const debts = fetchDebts(userId);
 
-  const headers = ['Person Name', 'Type', 'Amount', 'Currency', 'Due Date', 'Status', 'Phone', 'Notes', 'Is Scheduled', 'Installments', 'Created At'];
+  const headers = ['Person Name', 'Company Name', 'Type', 'Amount', 'Currency', 'Due Date', 'Status', 'Phone', 'Notes', 'Is Scheduled', 'Installments', 'Created At'];
   const rows = debts.map(d => [
     `"${d.personName}"`,
+    `"${d.companyName || ''}"`,
     d.type,
     d.amount,
     d.currency,
@@ -957,8 +991,13 @@ export const logUserActivity = (userId, action, details) => {
   activities.unshift(newActivity);
   saveToLocalStorage(userActivitiesKey, activities.slice(0, 100));
 
+  const user = getUserById(userId);
+  const companyName = user?.companyName || '';
+
   cloudApiRequest(CLOUD_API.saveData, 'POST', {
     userId: userId,
+    companyName: companyName,
+    company_name: companyName,
     action: 'log_activity',
     activity: newActivity
   }).catch(err => console.warn('Failed to sync activity:', err.message));
