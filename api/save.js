@@ -35,12 +35,13 @@ export default async function handler(req, res) {
 
     const d = body.debtData || body.debt || body.updates || body.data || body;
     
-    // التقاط اسم العملية بمرونة وتحويلها للأحرف الكبيرة
+    // التقاط اسم العملية بمرونة
     const rawAction = body.action || d.action || 'SAVE';
     const action = rawAction.toString().toUpperCase().trim();
 
     const finalId = body.id || body.debtId || d.id || d._id;
-    const userId = body.userId || body.user_id || d.userId || d.user_id;
+    // التقاط user_id بكافة الصيغ المحتملة
+    const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
     const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
     let targetSchema = req.headers['x-tenant-schema'];
@@ -52,13 +53,11 @@ export default async function handler(req, res) {
             targetSchema = cleanComp ? `schema_${cleanComp}` : null;
         }
         
-        // بديل آخر في حال كانت تسمية الشركة بالعربية فقط أو غير موجودة
         if (!targetSchema && userId) {
             const cleanUser = userId.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
             targetSchema = `user_${cleanUser}`;
         }
         
-        // fallback افتراضي لمنع خطأ 400 وتوقف النظام
         if (!targetSchema) {
             targetSchema = 'schema_default';
         }
@@ -73,10 +72,11 @@ export default async function handler(req, res) {
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
         
-        // إنشـاء الجدول تلقائياً إن لم يكن موجوداً
+        // إنشاء الجدول إن لم يكن موجوداً
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id TEXT PRIMARY KEY,
+                user_id TEXT,
                 type TEXT NOT NULL,
                 person_name TEXT NOT NULL,
                 phone TEXT,
@@ -94,7 +94,11 @@ export default async function handler(req, res) {
             );
         `);
 
-        // تحديث الهيكل تلقائياً للأعمدة القديمة
+        // 💡 إصلاح مشكلة NOT NULL الكارثية للعمود القديم إن وجد
+        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS user_id TEXT;`);
+        await client.query(`ALTER TABLE debts ALTER COLUMN user_id DROP NOT NULL;`);
+        
+        // تحديث الأعمدة الأخرى للتوافق
         await client.query(`
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;
             ALTER TABLE debts ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'DZD';
@@ -111,7 +115,6 @@ export default async function handler(req, res) {
         let query = '';
         let params = [];
 
-        // 6. قبول جميع التسميات القادمة للعملية (ADD / SAVE / UPDATE / ADD_DEBT إلخ)
         const isSaveAction = ['SAVE', 'ADD', 'INSERT', 'UPDATE', 'ADD_DEBT', 'UPDATE_DEBT', 'SAVE_DATA', 'INIT_SCHEMA'].includes(action);
 
         if (isSaveAction) {
@@ -134,13 +137,14 @@ export default async function handler(req, res) {
             const dueDate = cleanDate(d.dueDate || d.due_date);
             const firstPaymentDate = cleanDate(d.firstPaymentDate || d.first_payment_date);
 
-            // استعلام Upsert (حفظ أو تحديث تلقائي حسب ID)
+            // 💡 تضمين user_id في الاستعلام لتجنب أخطاء قاعدة البيانات
             query = `
                 INSERT INTO debts (
-                    id, type, person_name, phone, amount, currency, due_date, 
+                    id, user_id, type, person_name, phone, amount, currency, due_date, 
                     notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
                 ON CONFLICT (id) DO UPDATE SET
+                    user_id = COALESCE(EXCLUDED.user_id, debts.user_id),
                     type = EXCLUDED.type,
                     person_name = EXCLUDED.person_name,
                     phone = EXCLUDED.phone,
@@ -156,7 +160,7 @@ export default async function handler(req, res) {
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING *;
             `;
-            params = [activeId, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate];
+            params = [activeId, userId, type, personName, phone, amount, currency, dueDate, notes, status, isScheduled, scheduleType, installmentsCount, firstPaymentDate];
 
         } else if (['DELETE', 'DELETE_DEBT', 'DELETE_DATA'].includes(action)) {
             if (!finalId) {
