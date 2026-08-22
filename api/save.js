@@ -56,7 +56,6 @@ export default async function handler(req, res) {
 
         const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
-        // إذا لم يصل userId صراحةً، نستخدم اسم Schema كـ fallback
         if (!userId) {
             userId = cleanSchema;
         }
@@ -66,44 +65,32 @@ export default async function handler(req, res) {
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
 
-        // 2. إنشاء الجدول
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS debts (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                type TEXT NOT NULL,
-                person_name TEXT NOT NULL,
-                phone TEXT,
-                amount NUMERIC NOT NULL,
-                currency TEXT DEFAULT 'DZD',
-                due_date DATE,
-                notes TEXT,
-                status TEXT DEFAULT 'pending',
-                is_scheduled BOOLEAN DEFAULT FALSE,
-                schedule_type TEXT,
-                installments_count INT DEFAULT 0,
-                first_payment_date DATE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
+        // 2. إصلاح وترقية الأعمدة في الجدول الموجود اصلاً
+        const fixColumnsQueries = [
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS user_id TEXT;`,
+            `ALTER TABLE debts ALTER COLUMN user_id DROP NOT NULL;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS title TEXT;`,
+            `ALTER TABLE debts ALTER COLUMN title DROP NOT NULL;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'DZD';`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS due_date DATE;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS notes TEXT;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN DEFAULT FALSE;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS schedule_type TEXT;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS installments_count INT DEFAULT 0;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS first_payment_date DATE;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`,
+            `ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`
+        ];
 
-        // 3. 💡 إزالة شرط NOT NULL من user_id لمنع هذا الخطأ نهائياً
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS user_id TEXT;`);
-        await client.query(`ALTER TABLE debts ALTER COLUMN user_id DROP NOT NULL;`);
-
-        // ترقية باقي الأعمدة إن وجدت
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'DZD';`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS due_date DATE;`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS notes TEXT;`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN DEFAULT FALSE;`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS schedule_type TEXT;`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS installments_count INT DEFAULT 0;`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS first_payment_date DATE;`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
-        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
+        for (const q of fixColumnsQueries) {
+            try {
+                await client.query(q);
+            } catch (err) {
+                // يتجاهل أي أخطاء إذا كانت التعديلات منفذة سابقاً
+            }
+        }
 
         let query = '';
         let params = [];
@@ -113,6 +100,10 @@ export default async function handler(req, res) {
         if (isSaveAction) {
             const activeId = finalId || `debt_${Date.now()}`;
             const personName = d.personName || d.person_name || d.person_Name || 'غير محدد';
+            
+            // نضمن القيمة حتى وإن لم تصل من الواجهة الأمامية
+            const title = d.title || d.notes || `دين: ${personName}` || 'دين جديد';
+            
             const type = d.type || 'owed_to_me';
             const phone = d.phone || d.personPhone || d.person_phone || null;
             const amount = parseFloat(d.amount) || 0;
@@ -133,11 +124,12 @@ export default async function handler(req, res) {
 
             query = `
                 INSERT INTO debts (
-                    id, user_id, type, person_name, phone, amount, currency, due_date, 
+                    id, user_id, title, type, person_name, phone, amount, currency, due_date, 
                     notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
                 ON CONFLICT (id) DO UPDATE SET
-                    user_id = EXCLUDED.user_id,
+                    user_id = COALESCE(EXCLUDED.user_id, debts.user_id),
+                    title = COALESCE(EXCLUDED.title, debts.title),
                     type = EXCLUDED.type,
                     person_name = EXCLUDED.person_name,
                     phone = EXCLUDED.phone,
@@ -155,7 +147,7 @@ export default async function handler(req, res) {
             `;
 
             params = [
-                activeId, userId, type, personName, phone, amount, currency, 
+                activeId, userId, title, type, personName, phone, amount, currency, 
                 dueDate, notes, status, isScheduled, scheduleType, 
                 installmentsCount, firstPaymentDate
             ];
