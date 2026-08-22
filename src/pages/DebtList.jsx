@@ -27,7 +27,7 @@ import {
  * Integrates with WhatsApp for quick reminders
  */
 export default function DebtList() {
-  const { t, debts, setDebts, language, openWhatsApp, darkMode, currentUser, refreshDebts } = useApp();
+  const { t, debts, setDebts, language, openWhatsApp, darkMode, currentUser } = useApp();
   const navigate = useNavigate();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -108,47 +108,50 @@ export default function DebtList() {
     openWhatsApp(debt.phone || '', message);
   };
 
-  // دالة التعامل مع حذف الدين المتوافقة مع أندرويد والتخزين المحلي والسحابي
+  // دالة التعامل مع حذف الدين بشكل نهائي ومستقر
   const handleDeleteDebt = async (e, debt) => {
-    e.stopPropagation(); // منع الانتقال لصفحة تفاصيل الدين
-    const debtIdToDelete = debt.id || debt._id || debt.debt_id || debt.debtId || '';
-    
-    if (deletingIds.includes(debtIdToDelete)) return; // منع التكرار الضغط
+    e.preventDefault();
+    e.stopPropagation(); // منع الانتقال لصفحة تفاصيل الدين عند الضغط على زر الحذف
+
+    const debtIdToDelete = debt.id || debt._id || debt.debt_id || debt.debtId;
+    if (!debtIdToDelete || deletingIds.includes(debtIdToDelete)) return;
 
     const nameDisplay = debt.personName || debt.person_name || 'هذا الدين';
     const confirmMessage = language === 'ar' 
-      ? `هل أنت تأكد من رغبتك في حذف دين "${nameDisplay}"؟` 
-      : 'Are you sure you want to delete this debt?';
+      ? `هل أنت تأكد من رغبتك في حذف دين "${nameDisplay}" نهائياً؟` 
+      : 'Are you sure you want to permanently delete this debt?';
       
     if (window.confirm(confirmMessage)) {
-      // احتفظ بنسخة احتياطية في حال فشلت العملية السحابية لإعادتها
+      // حفظ نسخة احتياطية لإعادتها في حالة فشل الاتصال بالسيرفر
       const previousDebts = [...debts];
 
       try {
         setDeletingIds(prev => [...prev, debtIdToDelete]);
 
-        // 1. الحذف الفوري محلياً من الـ State والتخزين المحلي لأندرويد (مستبقاً للسحابة لمنع الحفظ التلقائي)
+        // 1. التحديث الفوري المباشر للواجهة والتخزين المحلي
+        const filterFn = (d) => (d.id || d._id || d.debtId || d.debt_id) !== debtIdToDelete;
+        
         if (setDebts) {
-          setDebts(prev => prev.filter(d => (d.id || d._id || d.debtId) !== debtIdToDelete));
+          setDebts(prev => prev.filter(filterFn));
         }
 
-        // تحديث الـ LocalStorage المباشر إن وجد
         try {
           const storedLocal = localStorage.getItem('debts');
           if (storedLocal) {
             const parsed = JSON.parse(storedLocal);
-            const filtered = parsed.filter(d => (d.id || d._id || d.debtId) !== debtIdToDelete);
+            const filtered = parsed.filter(filterFn);
             localStorage.setItem('debts', JSON.stringify(filtered));
           }
-        } catch (e) {
-          console.warn('LocalStorage bypass:', e);
+        } catch (localErr) {
+          console.warn('LocalStorage cache update failed:', localErr);
         }
 
-        // 2. إرسال أمر الحذف للسيرفر
+        // 2. إرسال أمر الحذف المباشر للباك إند
         const personName = debt.personName || debt.person_name || '';
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
+        // إرسال كائن البيانات بالتوافق المزدوج مع السيرفر
         await deleteDebt({
           action: 'DELETE',
           id: debtIdToDelete,
@@ -156,16 +159,11 @@ export default function DebtList() {
           companyName: companyName,
           userId: userId
         });
-        
-        // 3. مزامنة القائمة من السيرفر للتأكد النهائي
-        if (refreshDebts) {
-          await refreshDebts(); 
-        }
 
       } catch (error) {
         console.error('Error deleting debt:', error);
         alert(language === 'ar' ? 'تعذر الحذف من السيرفر، يرجى المحاولة لاحقاً' : 'Failed to delete debt from server');
-        // إعادة البيانات محلياً إذا فشلت عملية الشبكة
+        // استرجاع البيانات إذا فشل السيرفر
         if (setDebts) {
           setDebts(previousDebts);
         }
@@ -190,6 +188,7 @@ export default function DebtList() {
       <header className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white p-4 sticky top-0 z-10 shadow-lg">
         <div className="flex items-center gap-3 mb-4">
           <button
+            type="button"
             onClick={() => navigate('/')}
             className="p-2 rounded-xl hover:bg-white/20 transition"
           >
@@ -197,6 +196,7 @@ export default function DebtList() {
           </button>
           <h1 className="text-xl font-bold flex-1">{t('debts')}</h1>
           <button
+            type="button"
             onClick={() => setShowFilters(!showFilters)}
             className={`p-2 rounded-xl transition ${showFilters ? 'bg-white/30' : 'hover:bg-white/20'}`}
           >
@@ -216,6 +216,7 @@ export default function DebtList() {
           />
           {searchQuery && (
             <button
+              type="button"
               onClick={() => setSearchQuery('')}
               className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-lg hover:bg-white/20 transition"
             >
@@ -298,7 +299,7 @@ export default function DebtList() {
       {filteredDebts.length > 0 ? (
         <div className="px-4 space-y-3">
           {filteredDebts.map((debt, index) => {
-            const currentId = debt.id || debt._id || index;
+            const currentId = debt.id || debt._id || debt.debtId || index;
             const isDeleting = deletingIds.includes(currentId);
 
             return (
@@ -363,6 +364,7 @@ export default function DebtList() {
                           {debt.phone && (
                             <>
                               <button
+                                type="button"
                                 onClick={(e) => handleWhatsApp(e, debt)}
                                 className="p-2 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 text-green-500 transition"
                                 title="WhatsApp"
@@ -382,6 +384,7 @@ export default function DebtList() {
                           
                           {/* زر الحذف الأيقوني لكل دين */}
                           <button
+                            type="button"
                             disabled={isDeleting}
                             onClick={(e) => handleDeleteDebt(e, debt)}
                             className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition disabled:opacity-30"
@@ -419,6 +422,7 @@ export default function DebtList() {
               : (language === 'ar' ? 'أضف أول دين لك' : language === 'fr' ? 'Ajoutez votre première dette' : 'Add your first debt')}
           </p>
           <button
+            type="button"
             onClick={() => navigate('/debts/add')}
             className="inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-2xl font-bold shadow-lg hover:shadow-xl transition-all"
           >
@@ -430,6 +434,7 @@ export default function DebtList() {
 
       {/* FAB */}
       <button
+        type="button"
         onClick={() => navigate('/debts/add')}
         className="fixed bottom-20 right-4 w-16 h-16 rounded-full bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-xl flex items-center justify-center hover:scale-110 transition-transform"
       >
