@@ -627,111 +627,63 @@ export default function DebtForm() {
                       {language === 'ar' ? 'حفظ الحركة' : 'Apply'}
                     </button>
                   </div>
-
-                  {/* جدول عرض الحركات المسجلة والمربوطة بالجدولة */}
-                  <div className="overflow-x-auto rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-700">
-                    <table className="w-full text-xs text-start">
-                      <thead className="text-[10px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-600 uppercase font-bold">
-                        <tr>
-                          <th scope="col" className="px-3 py-2 text-start">{language === 'ar' ? 'التاريخ' : 'Date'}</th>
-                          <th scope="col" className="px-3 py-2 text-start">{language === 'ar' ? 'النوع' : 'Type'}</th>
-                          <th scope="col" className="px-3 py-2 text-end">{language === 'ar' ? 'المبلغ' : 'Amount'}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100 dark:divide-gray-600">
-                        {paymentsList.map((p) => (
-                          <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-600/50 transition-colors">
-                            <td className="px-3 py-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">{p.date}</td>
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                p.type === 'record'
-                                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                                  : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                              }`}>
-                                {p.type === 'record' 
-                                  ? (language === 'ar' ? 'إضافة' : 'Added') 
-                                  : (language === 'ar' ? 'تسديد' : 'Settled')}
-                              </span>
-                            </td>
-                            <td className={`px-3 py-2 text-end font-bold ${
-                              p.type === 'record' ? 'text-emerald-600' : 'text-blue-600'
-                            }`}>
-                              {p.amount.toFixed(2)} {formData.currency}
-                            </td>
-                          </tr>
-                        ))}
-                        {paymentsList.length === 0 && (
-                          <tr>
-                            <td colSpan="3" className="px-3 py-4 text-center text-gray-400 dark:text-gray-500">
-                              {language === 'ar' ? 'لا توجد حركات دفع مسجلة بعد' : 'No payments registered yet'}
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
                 </div>
               </div>
-
             </div>
           )}
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex gap-3 pt-2">
-          {isEditing && (
-            <button
-              type="button"
-              onClick={() => setShowDeleteConfirm(true)}
-              className="p-3.5 bg-red-50 text-red-500 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 rounded-xl transition shadow-sm flex items-center justify-center"
-              disabled={loading}
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
-          )}
+        {/* Submit Button */}
+        <div className="pt-2">
           <button
             type="submit"
-            className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 text-base"
             disabled={loading}
+            className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-2xl font-bold shadow-lg hover:opacity-95 transition flex items-center justify-center gap-2 text-base disabled:opacity-50"
           >
             <Save className="w-5 h-5" />
-            {loading ? t('saving') : t('save')}
+            {loading ? (language === 'ar' ? 'جاري الحفظ...' : 'Saving...') : (isEditing ? t('updateDebt') : t('saveDebt'))}
           </button>
         </div>
-      </form>
 
-      {/* Delete Confirmation Modal */}
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center">
-            <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mx-auto mb-4 text-red-500">
-              <AlertCircle className="w-6 h-6" />
-            </div>
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
-              {language === 'ar' ? 'هل أنت متأكد من الحذف؟' : 'Confirm Delete'}
-            </h3>
-            <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
-              {language === 'ar' ? 'لا يمكن التراجع عن هذا الإجراء وسيتم مسح كافة البيانات.' : 'This action cannot be undone.'}
-            </p>
-            <div className="flex gap-3">
+        {/* Delete Button - Only for editing */}
+        {isEditing && (
+          <div className="pt-2">
+            {!showDeleteConfirm ? (
               <button
                 type="button"
-                onClick={() => setShowDeleteConfirm(false)}
-                className="flex-1 py-2.5 px-4 rounded-xl border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="w-full py-3.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl font-bold hover:bg-red-100 dark:hover:bg-red-900/40 transition flex items-center justify-center gap-2 text-sm"
               >
-                {t('cancel')}
+                <Trash2 className="w-4 h-4" />
+                {t('deleteDebt')}
               </button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-red-500 text-white font-bold hover:bg-red-600 shadow-md transition"
-              >
-                {t('delete')}
-              </button>
-            </div>
+            ) : (
+              <div className="bg-red-50 dark:bg-red-900/20 rounded-2xl p-4 border-2 border-red-200 dark:border-red-800 space-y-3">
+                <p className="text-sm font-bold text-red-600 dark:text-red-400 text-center flex items-center justify-center gap-2">
+                  <AlertCircle className="w-4 h-4" />
+                  {language === 'ar' ? 'هل أنت تأكد من رغبتك في حذف هذا الدين؟' : 'Are you sure you want to delete this debt?'}
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    className="py-2.5 bg-red-600 text-white rounded-xl font-bold text-xs hover:bg-red-700 transition"
+                  >
+                    {language === 'ar' ? 'نعم، احذف' : 'Yes, Delete'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="py-2.5 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-xl font-bold text-xs hover:bg-gray-300 transition"
+                  >
+                    {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        )}
+      </form>
     </div>
   );
 }
