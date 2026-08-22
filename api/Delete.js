@@ -49,7 +49,7 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: 'يرجى إرسال id أو personName الخاص بالدين' });
         }
 
-        // بناء المخططات المحتملة
+        // 1. بناء المخططات المحتملة (Schemas)
         const candidateSchemas = [];
         if (tenantHeader) candidateSchemas.push(tenantHeader.toLowerCase().replace(/[^a-zA-Z0-9_]/g, ''));
         if (companyName) candidateSchemas.push(`schema_${companyName.toLowerCase().replace(/[^a-zA-Z0-9_]/g, '')}`);
@@ -63,49 +63,78 @@ export default async function handler(req, res) {
         const cleanId = debtId ? String(debtId).trim() : '';
         const rawIdWithoutPrefix = cleanId.replace(/^debt_/, '');
 
+        // 2. بناء أسماء الجداول المحتملة (debts أو user_{userId}_debts)
+        const targetTables = ['debts'];
+        if (userId) {
+            const formattedUserId = String(userId).replace(/-/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+            targetTables.unshift(`user_${formattedUserId}_debts`);
+        }
+
         let actionResult = { rowCount: 0, rows: [] };
         let successfulSchema = '';
+        let successfulTable = '';
 
+        // البحث في جميع المخططات والجداول المحتملة
         for (const currentSchema of uniqueSchemas) {
             try {
                 await client.query(`SET search_path TO "${currentSchema}";`);
 
-                // 💡 حذف نهائي (HARD DELETE) لحل مشكلة ظهور العنصر مجدداً
-                if (cleanId) {
-                    actionResult = await client.query(
-                        `DELETE FROM debts 
-                         WHERE id::text = $1 
-                            OR id::text = $2 
-                            OR id::text LIKE $3 
-                            OR REPLACE(id::text, 'debt_', '') = $4
-                         RETURNING *;`,
-                        [cleanId, `debt_${rawIdWithoutPrefix}`, `%${rawIdWithoutPrefix}%`, rawIdWithoutPrefix]
-                    );
+                for (const table of targetTables) {
+                    try {
+                        if (cleanId) {
+                            actionResult = await client.query(
+                                `DELETE FROM ${table} 
+                                 WHERE id::text = $1 
+                                    OR id::text = $2 
+                                    OR id::text LIKE $3 
+                                    OR REPLACE(id::text, 'debt_', '') = $4
+                                 RETURNING *;`,
+                                [cleanId, `debt_${rawIdWithoutPrefix}`, `%${rawIdWithoutPrefix}%`, rawIdWithoutPrefix]
+                            );
+                        }
+
+                        if (actionResult.rowCount === 0 && personName) {
+                            actionResult = await client.query(
+                                `DELETE FROM ${table} 
+                                 WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) 
+                                 RETURNING *;`,
+                                [String(personName).trim()]
+                            );
+                        }
+
+                        if (actionResult.rowCount > 0) {
+                            successfulSchema = currentSchema;
+                            successfulTable = table;
+                            break;
+                        }
+                    } catch (tableErr) {
+                        // تجاهل خطأ عدم وجود الجدول والتنقل للجدول التالي
+                        continue;
+                    }
                 }
 
-                if (actionResult.rowCount === 0 && personName) {
-                    actionResult = await client.query(
-                        `DELETE FROM debts 
-                         WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) 
-                         RETURNING *;`,
-                        [String(personName).trim()]
-                    );
-                }
-
-                if (actionResult.rowCount > 0) {
-                    successfulSchema = currentSchema;
-                    break;
-                }
+                if (actionResult.rowCount > 0) break;
             } catch (err) {
                 continue;
             }
+        }
+
+        // 3. التحقق من نجاح عملية الحذف الفعلية
+        if (actionResult.rowCount === 0) {
+            return res.status(444 || 404).json({
+                success: false,
+                message: 'لم يتم العثور على الدين في أي جدول أو مخطط لحذفه',
+                searchedSchemas: uniqueSchemas,
+                debtId: cleanId
+            });
         }
 
         return res.status(200).json({
             success: true,
             message: 'تم الحذف النهائي للدين بنجاح',
             schemaName: successfulSchema,
-            deletedRecord: actionResult.rows[0] || null
+            tableName: successfulTable,
+            deletedRecord: actionResult.rows[0]
         });
 
     } catch (error) {
