@@ -3,7 +3,7 @@ import pg from 'pg';
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST,DELETE');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST,DELETE,PUT,PATCH');
     res.setHeader(
         'Access-Control-Allow-Headers',
         'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, x-tenant-schema, x-company-name, x-user-id, tenant, user-id'
@@ -41,12 +41,12 @@ export default async function handler(req, res) {
 
         // تحقق من المعرفات الأساسية
         if (!debtId && !personName) {
-            return res.status(400).json({ error: 'يرجى إرسال id أو personName الخاص بالدين المراد حذفه' });
+            return res.status(400).json({ error: 'يرجى إرسال id أو personName الخاص بالدين' });
         }
 
         await client.connect();
 
-        // 1. محاولة استكمال بيانات الحساب إذا كان أحد البيانات ناقصاً
+        // 1. استكمال بيانات الحساب إذا كان أحد البيانات ناقصاً
         if ((!companyName || !userId) && (userId || email)) {
             const userQuery = userId 
                 ? 'SELECT company_name, id FROM public.app_users WHERE id = $1 LIMIT 1'
@@ -60,7 +60,7 @@ export default async function handler(req, res) {
             }
         }
 
-        // 2. بناء المخططات والجداول المحتملة دون رفض الطلب بـ 400
+        // 2. بناء المخططات المحتملة
         const candidateSchemas = [];
 
         if (companyName) {
@@ -74,67 +74,94 @@ export default async function handler(req, res) {
             candidateSchemas.push(`user_${cleanUserId}`);
         }
 
-        // إضافة المخططات الافتراضية لمنع القفل وخطأ 400
         candidateSchemas.push('public');
 
-        let deleteResult = { rowCount: 0, rows: [] };
+        let actionResult = { rowCount: 0, rows: [] };
         let successfulSchema = '';
 
         const cleanId = debtId ? String(debtId).trim() : '';
         const rawIdWithoutPrefix = cleanId.replace(/^debt_/, '');
 
-        // 3. البحث والحذف عبر المخططات المتاحة
+        // 3. التنفيذ عبر المخططات المتاحة
         for (const currentSchema of candidateSchemas) {
             try {
                 await client.query(`SET search_path TO "${currentSchema}", public;`);
 
-                if (cleanId) {
-                    deleteResult = await client.query(
-                        `DELETE FROM debts 
-                         WHERE id::text = $1 
-                            OR id::text = $2 
-                            OR id::text LIKE $3 
-                            OR REPLACE(id::text, 'debt_', '') = $4
-                         RETURNING *;`,
-                        [cleanId, `debt_${rawIdWithoutPrefix}`, `%${rawIdWithoutPrefix}%`, rawIdWithoutPrefix]
+                // إضافة عمود is_deleted في حالة عدم وجوده لمنع الأخطاء في الجداول القديمة
+                await client.query(`
+                    ALTER TABLE debts ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false;
+                `).catch(() => {});
+
+                // إذا كان الطلب عبارة عن إعادة حفظ تلقائية من الواجهة لـ ID تم حذفه سابقاً:
+                if (req.method === 'POST' || req.method === 'PUT') {
+                    const checkDeleted = await client.query(
+                        `SELECT is_deleted FROM debts WHERE id::text = $1 OR id::text = $2 LIMIT 1;`,
+                        [cleanId, `debt_${rawIdWithoutPrefix}`]
                     );
+
+                    if (checkDeleted.rows.length > 0 && checkDeleted.rows[0].is_deleted === true) {
+                        // كبح حفظ البيانات المحذوفة وإخبار التطبيق بالنجاح المباشر
+                        return res.status(200).json({
+                            success: true,
+                            message: 'تم تجاهل إعادة الحفظ لأن هذا العنصر محذوف سبقاً',
+                            isDeleted: true
+                        });
+                    }
                 }
 
-                if (deleteResult.rowCount === 0 && personName) {
-                    deleteResult = await client.query(
-                        `DELETE FROM debts WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) RETURNING *;`,
-                        [String(personName).trim()]
-                    );
+                // تنفيذ Soft Delete عند طلب الحذف (DELETE)
+                if (req.method === 'DELETE' || body.action === 'DELETE') {
+                    if (cleanId) {
+                        actionResult = await client.query(
+                            `UPDATE debts 
+                             SET is_deleted = true, updated_at = CURRENT_TIMESTAMP 
+                             WHERE id::text = $1 
+                                OR id::text = $2 
+                                OR id::text LIKE $3 
+                                OR REPLACE(id::text, 'debt_', '') = $4
+                             RETURNING *;`,
+                            [cleanId, `debt_${rawIdWithoutPrefix}`, `%${rawIdWithoutPrefix}%`, rawIdWithoutPrefix]
+                        );
+                    }
+
+                    if (actionResult.rowCount === 0 && personName) {
+                        actionResult = await client.query(
+                            `UPDATE debts 
+                             SET is_deleted = true, updated_at = CURRENT_TIMESTAMP 
+                             WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) 
+                             RETURNING *;`,
+                            [String(personName).trim()]
+                        );
+                    }
                 }
 
-                if (deleteResult.rowCount > 0) {
+                if (actionResult.rowCount > 0) {
                     successfulSchema = currentSchema;
                     break;
                 }
             } catch (err) {
-                // استمرار البحث في حال كان الجدول أو الـ Schema غير موجود
                 continue;
             }
         }
 
-        if (deleteResult.rowCount === 0) {
+        if (actionResult.rowCount === 0) {
             return res.status(200).json({
                 success: true,
-                message: 'تم الحذف محلياً أو تم حذفه سابقاً من القاعدة',
+                message: 'تم الحذف أو لم يتم العثور على العنصر في قاعدة البيانات',
                 schemasChecked: candidateSchemas
             });
         }
 
         return res.status(200).json({
             success: true,
-            message: 'تم حذف الدين بنجاح',
+            message: 'تم حذف الدين بنجاح ولن يعاد حفظه تلقائياً',
             schemaName: successfulSchema,
-            deletedRecord: deleteResult.rows[0]
+            deletedRecord: actionResult.rows[0]
         });
 
     } catch (error) {
         console.error('Delete API Error:', error);
-        return res.status(500).json({ error: error.message || 'حدث خطأ أثناء عملية الحذف' });
+        return res.status(500).json({ error: error.message || 'حدث خطأ أثناء العملية' });
     } finally {
         if (client) await client.end().catch(err => console.error('Error closing client:', err));
     }
