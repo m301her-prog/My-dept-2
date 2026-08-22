@@ -18,7 +18,7 @@ import {
   ArrowLeft,
   X,
   SortAsc,
-  Trash2 // تم إضافة أيقونة الحذف
+  Trash2
 } from 'lucide-react';
 
 /**
@@ -27,7 +27,7 @@ import {
  * Integrates with WhatsApp for quick reminders
  */
 export default function DebtList() {
-  const { t, debts, language, openWhatsApp, darkMode, currentUser, refreshDebts } = useApp();
+  const { t, debts, setDebts, language, openWhatsApp, darkMode, currentUser, refreshDebts } = useApp();
   const navigate = useNavigate();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -35,6 +35,7 @@ export default function DebtList() {
   const [filterStatus, setFilterStatus] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
   const [showFilters, setShowFilters] = useState(false);
+  const [deletingIds, setDeletingIds] = useState([]); // لتعقب الديون الجاري حذفها لمنع نقرات متعددة
 
   // Filter and sort debts
   const filteredDebts = useMemo(() => {
@@ -44,7 +45,7 @@ export default function DebtList() {
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
         return (
-          debt.personName.toLowerCase().includes(query) ||
+          debt.personName?.toLowerCase().includes(query) ||
           debt.notes?.toLowerCase().includes(query)
         );
       }
@@ -56,7 +57,7 @@ export default function DebtList() {
       case 'newest':
         return result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       case 'oldest':
-        return result.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        return result.sort((a, b) => new Date(a.createdAt) - new Date(a.createdAt));
       case 'amount_desc':
         return result.sort((a, b) => b.amount - a.amount);
       case 'amount_asc':
@@ -107,35 +108,69 @@ export default function DebtList() {
     openWhatsApp(debt.phone || '', message);
   };
 
-  // دالة التعامل مع حذف الدين المتوافقة تماماً مع الباك إند
+  // دالة التعامل مع حذف الدين المتوافقة مع أندرويد والتخزين المحلي والسحابي
   const handleDeleteDebt = async (e, debt) => {
     e.stopPropagation(); // منع الانتقال لصفحة تفاصيل الدين
+    const debtIdToDelete = debt.id || debt._id || debt.debt_id || debt.debtId || '';
+    
+    if (deletingIds.includes(debtIdToDelete)) return; // منع التكرار الضغط
+
     const nameDisplay = debt.personName || debt.person_name || 'هذا الدين';
     const confirmMessage = language === 'ar' 
       ? `هل أنت تأكد من رغبتك في حذف دين "${nameDisplay}"؟` 
       : 'Are you sure you want to delete this debt?';
       
     if (window.confirm(confirmMessage)) {
+      // احتفظ بنسخة احتياطية في حال فشلت العملية السحابية لإعادتها
+      const previousDebts = [...debts];
+
       try {
-        // استخراج البيانات المتاحة للحذف (سواء بالأيدى أو الاسم)
-        const debtIdToDelete = debt.id || debt._id || debt.debt_id || debt.debtId || '';
+        setDeletingIds(prev => [...prev, debtIdToDelete]);
+
+        // 1. الحذف الفوري محلياً من الـ State والتخزين المحلي لأندرويد (مستبقاً للسحابة لمنع الحفظ التلقائي)
+        if (setDebts) {
+          setDebts(prev => prev.filter(d => (d.id || d._id || d.debtId) !== debtIdToDelete));
+        }
+
+        // تحديث الـ LocalStorage المباشر إن وجد
+        try {
+          const storedLocal = localStorage.getItem('debts');
+          if (storedLocal) {
+            const parsed = JSON.parse(storedLocal);
+            const filtered = parsed.filter(d => (d.id || d._id || d.debtId) !== debtIdToDelete);
+            localStorage.setItem('debts', JSON.stringify(filtered));
+          }
+        } catch (e) {
+          console.warn('LocalStorage bypass:', e);
+        }
+
+        // 2. إرسال أمر الحذف للسيرفر
         const personName = debt.personName || debt.person_name || '';
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // إرسال الكائن المحتوي على المعلومات ليتوافق مع خدمة neonService والباك إند
         await deleteDebt({
+          action: 'DELETE',
           id: debtIdToDelete,
           personName: personName,
           companyName: companyName,
           userId: userId
         });
         
+        // 3. مزامنة القائمة من السيرفر للتأكد النهائي
         if (refreshDebts) {
-          await refreshDebts(); // تحديث القائمة بعد نجاح الحذف
+          await refreshDebts(); 
         }
+
       } catch (error) {
         console.error('Error deleting debt:', error);
+        alert(language === 'ar' ? 'تعذر الحذف من السيرفر، يرجى المحاولة لاحقاً' : 'Failed to delete debt from server');
+        // إعادة البيانات محلياً إذا فشلت عملية الشبكة
+        if (setDebts) {
+          setDebts(previousDebts);
+        }
+      } finally {
+        setDeletingIds(prev => prev.filter(id => id !== debtIdToDelete));
       }
     }
   };
@@ -262,105 +297,113 @@ export default function DebtList() {
       {/* Debt List */}
       {filteredDebts.length > 0 ? (
         <div className="px-4 space-y-3">
-          {filteredDebts.map((debt, index) => (
-            <div
-              key={debt.id || index}
-              onClick={() => navigate(`/debts/${debt.id}`)}
-              className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden cursor-pointer hover:shadow-xl active:scale-[0.98] transition-all"
-            >
-              <div className="p-4">
-                <div className="flex items-start gap-4">
-                  {/* Type Icon */}
-                  <div className={`w-14 h-14 rounded-xl flex items-center justify-center ${
-                    debt.type === 'owed_to_me'
-                      ? 'bg-emerald-100 dark:bg-emerald-900/30'
-                      : 'bg-red-100 dark:bg-red-900/30'
-                  }`}>
-                    {debt.type === 'owed_to_me' ? (
-                      <TrendingUp className="w-7 h-7 text-emerald-500" />
-                    ) : (
-                      <TrendingDown className="w-7 h-7 text-red-500" />
-                    )}
-                  </div>
+          {filteredDebts.map((debt, index) => {
+            const currentId = debt.id || debt._id || index;
+            const isDeleting = deletingIds.includes(currentId);
 
-                  {/* Content */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div>
-                        <h3 className="font-bold text-gray-900 dark:text-white text-lg">
-                          {debt.personName}
-                        </h3>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {formatDate(debt.dueDate)}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className={`text-xl font-bold ${
-                          debt.type === 'owed_to_me' ? 'text-emerald-500' : 'text-red-500'
-                        }`}>
-                          {formatCurrency(debt.amount, debt.currency)}
-                        </p>
-                      </div>
+            return (
+              <div
+                key={currentId}
+                onClick={() => navigate(`/debts/${debt.id}`)}
+                className={`bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden cursor-pointer hover:shadow-xl active:scale-[0.98] transition-all ${
+                  isDeleting ? 'opacity-40 pointer-events-none' : ''
+                }`}
+              >
+                <div className="p-4">
+                  <div className="flex items-start gap-4">
+                    {/* Type Icon */}
+                    <div className={`w-14 h-14 rounded-xl flex items-center justify-center ${
+                      debt.type === 'owed_to_me'
+                        ? 'bg-emerald-100 dark:bg-emerald-900/30'
+                        : 'bg-red-100 dark:bg-red-900/30'
+                    }`}>
+                      {debt.type === 'owed_to_me' ? (
+                        <TrendingUp className="w-7 h-7 text-emerald-500" />
+                      ) : (
+                        <TrendingDown className="w-7 h-7 text-red-500" />
+                      )}
                     </div>
 
-                    {/* Status & Actions */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-xs px-3 py-1 rounded-full font-medium flex items-center gap-1 ${getStatusColor(debt)}`}>
-                          {getStatusIcon(debt)}
-                          {debt.status === 'paid' ? t('paid') : t('pending')}
-                        </span>
-                        {debt.currency !== 'DZD' && (
-                          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
-                            {debt.currency}
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div>
+                          <h3 className="font-bold text-gray-900 dark:text-white text-lg">
+                            {debt.personName}
+                          </h3>
+                          <p className="text-sm text-gray-500 dark:text-gray-400">
+                            {formatDate(debt.dueDate)}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className={`text-xl font-bold ${
+                            debt.type === 'owed_to_me' ? 'text-emerald-500' : 'text-red-500'
+                          }`}>
+                            {formatCurrency(debt.amount, debt.currency)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Status & Actions */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-xs px-3 py-1 rounded-full font-medium flex items-center gap-1 ${getStatusColor(debt)}`}>
+                            {getStatusIcon(debt)}
+                            {debt.status === 'paid' ? t('paid') : t('pending')}
                           </span>
-                        )}
-                      </div>
+                          {debt.currency !== 'DZD' && (
+                            <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                              {debt.currency}
+                            </span>
+                          )}
+                        </div>
 
-                      {/* Quick Actions & Delete Button */}
-                      <div className="flex items-center gap-1">
-                        {debt.phone && (
-                          <>
-                            <button
-                              onClick={(e) => handleWhatsApp(e, debt)}
-                              className="p-2 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 text-green-500 transition"
-                              title="WhatsApp"
-                            >
-                              <MessageCircle className="w-5 h-5" />
-                            </button>
-                            <a
-                              href={`tel:${debt.phone}`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="p-2 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500 transition"
-                              title={t('call')}
-                            >
-                              <Phone className="w-5 h-5" />
-                            </a>
-                          </>
-                        )}
-                        
-                        {/* زر الحذف الأيقوني لكل دين */}
-                        <button
-                          onClick={(e) => handleDeleteDebt(e, debt)}
-                          className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition"
-                          title="حذف الدين"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
+                        {/* Quick Actions & Delete Button */}
+                        <div className="flex items-center gap-1">
+                          {debt.phone && (
+                            <>
+                              <button
+                                onClick={(e) => handleWhatsApp(e, debt)}
+                                className="p-2 rounded-lg hover:bg-green-50 dark:hover:bg-green-900/20 text-green-500 transition"
+                                title="WhatsApp"
+                              >
+                                <MessageCircle className="w-5 h-5" />
+                              </button>
+                              <a
+                                href={`tel:${debt.phone}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="p-2 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500 transition"
+                                title={t('call')}
+                              >
+                                <Phone className="w-5 h-5" />
+                              </a>
+                            </>
+                          )}
+                          
+                          {/* زر الحذف الأيقوني لكل دين */}
+                          <button
+                            disabled={isDeleting}
+                            onClick={(e) => handleDeleteDebt(e, debt)}
+                            className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 transition disabled:opacity-30"
+                            title="حذف الدين"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Notes Preview */}
-                {debt.notes && (
-                  <p className="mt-3 text-sm text-gray-500 dark:text-gray-400 line-clamp-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2">
-                    {debt.notes}
-                  </p>
-                )}
+                  {/* Notes Preview */}
+                  {debt.notes && (
+                    <p className="mt-3 text-sm text-gray-500 dark:text-gray-400 line-clamp-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2">
+                      {debt.notes}
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="px-4 py-16 text-center">
