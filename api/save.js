@@ -1,13 +1,12 @@
 import pg from 'pg';
 
 export default async function handler(req, res) {
-    // إعدادات CORS
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader(
         'Access-Control-Allow-Headers',
-        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, x-tenant-schema'
+        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, x-tenant-schema, x-user-id'
     );
 
     if (req.method === 'OPTIONS') return res.status(200).end();
@@ -37,10 +36,10 @@ export default async function handler(req, res) {
         const action = rawAction.toString().toUpperCase().trim();
 
         const finalId = body.id || body.debtId || d.id || d._id;
-        const userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
+        let userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
         const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
-        // 1. تحديد اسم الـ Schema بنفس طريقة كود التسجيل
+        // 1. تحديد Schema
         let targetSchema = req.headers['x-tenant-schema'];
 
         if (!targetSchema || targetSchema.trim() === '') {
@@ -57,16 +56,21 @@ export default async function handler(req, res) {
 
         const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
+        // إذا لم يصل userId صراحةً، نستخدم اسم Schema كـ fallback
+        if (!userId) {
+            userId = cleanSchema;
+        }
+
         await client.connect();
 
-        // 2. التبديل إلى الـ Schema المستهدفة
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
 
-        // 3. التأكد من وجود الجدول بنفس هيكلية كود التسجيل بالضبط
+        // 2. إنشاء الجدول
         await client.query(`
             CREATE TABLE IF NOT EXISTS debts (
                 id TEXT PRIMARY KEY,
+                user_id TEXT,
                 type TEXT NOT NULL,
                 person_name TEXT NOT NULL,
                 phone TEXT,
@@ -84,7 +88,11 @@ export default async function handler(req, res) {
             );
         `);
 
-        // 4. ترقية الجداول القديمة تلقائياً لتفادي أخطاء الأعمدة المفقودة
+        // 3. 💡 إزالة شرط NOT NULL من user_id لمنع هذا الخطأ نهائياً
+        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS user_id TEXT;`);
+        await client.query(`ALTER TABLE debts ALTER COLUMN user_id DROP NOT NULL;`);
+
+        // ترقية باقي الأعمدة إن وجدت
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;`);
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'DZD';`);
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS due_date DATE;`);
@@ -123,13 +131,13 @@ export default async function handler(req, res) {
             const dueDate = cleanDate(d.dueDate || d.due_date);
             const firstPaymentDate = cleanDate(d.firstPaymentDate || d.first_payment_date);
 
-            // استعلام الإدخال / التحديث المطابق للجدول
             query = `
                 INSERT INTO debts (
-                    id, type, person_name, phone, amount, currency, due_date, 
+                    id, user_id, type, person_name, phone, amount, currency, due_date, 
                     notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
                 ON CONFLICT (id) DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
                     type = EXCLUDED.type,
                     person_name = EXCLUDED.person_name,
                     phone = EXCLUDED.phone,
@@ -147,7 +155,7 @@ export default async function handler(req, res) {
             `;
 
             params = [
-                activeId, type, personName, phone, amount, currency, 
+                activeId, userId, type, personName, phone, amount, currency, 
                 dueDate, notes, status, isScheduled, scheduleType, 
                 installmentsCount, firstPaymentDate
             ];
