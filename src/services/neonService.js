@@ -351,11 +351,16 @@ export const authUser = async (email, password) => {
 
       if (cloudResponse.debts && Array.isArray(cloudResponse.debts)) {
         const userDebtsKey = `user_${cloudUser.id}_debts`;
+        const deletedKeysKey = `user_${cloudUser.id}_deleted_ids`;
+        const deletedIds = loadFromLocalStorage(deletedKeysKey, []);
         const localDebts = loadFromLocalStorage(userDebtsKey, []);
 
         const mergedDebts = [...localDebts];
         cloudResponse.debts.forEach(cloudDebt => {
-          const existingIndex = mergedDebts.findIndex(d => d.id === cloudDebt.id);
+          const debtId = cloudDebt.id || cloudDebt._id;
+          if (deletedIds.includes(debtId)) return;
+
+          const existingIndex = mergedDebts.findIndex(d => (d.id === debtId || d._id === debtId));
           if (existingIndex === -1) {
             mergedDebts.push(cloudDebt);
           } else {
@@ -463,13 +468,19 @@ const fetchDebtsFromCloud = async (userId) => {
       console.log('Fetched debts from Cloud API:', cloudResponse.debts.length);
 
       const userDebtsKey = `user_${userId}_debts`;
+      const deletedKeysKey = `user_${userId}_deleted_ids`;
+      const deletedIds = loadFromLocalStorage(deletedKeysKey, []);
       const localDebts = loadFromLocalStorage(userDebtsKey, []);
 
       const mergedDebts = [...localDebts];
       let hasUpdates = false;
 
       cloudResponse.debts.forEach(cloudDebt => {
-        const existingIndex = mergedDebts.findIndex(d => d.id === cloudDebt.id);
+        const debtId = cloudDebt.id || cloudDebt._id;
+        // الاستبعاد إذا كان المعرف ضمن العناصر المحذوفة محلياً
+        if (deletedIds.includes(debtId)) return;
+
+        const existingIndex = mergedDebts.findIndex(d => d.id === debtId || d._id === debtId);
         if (existingIndex === -1) {
           mergedDebts.push(cloudDebt);
           hasUpdates = true;
@@ -592,7 +603,7 @@ export const updateDebtStatus = async (userId, debtId, updates, companyName = ''
   const userDebtsKey = `user_${userId}_debts`;
   const debts = loadFromLocalStorage(userDebtsKey, []);
 
-  const debtIndex = debts.findIndex(d => d.id === debtId);
+  const debtIndex = debts.findIndex(d => d.id === debtId || d._id === debtId);
   if (debtIndex === -1) {
     throw new Error('الدين غير موجود / Dette introuvable / Debt not found');
   }
@@ -644,7 +655,7 @@ export const updateDebtStatus = async (userId, debtId, updates, companyName = ''
 
 export const deleteDataFromCloud = async (id, companyName = '', userId = '') => {
   try {
-    const payload = { id, companyName, company_name: companyName };
+    const payload = { id, debtId: id, companyName, company_name: companyName };
     if (userId) payload.userId = userId;
 
     const response = await cloudApiRequest(CLOUD_API.deleteData, 'POST', payload);
@@ -667,12 +678,21 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
   const user = getUserById(targetUserId);
   const resolvedCompanyName = companyName || user?.companyName || '';
 
+  // 1. تسليط معرف العنصر المحذوف في قائمة العناصر المحذوفة لمنع استرجاعه مستقبلاً
+  const deletedKeysKey = `user_${targetUserId}_deleted_ids`;
+  const deletedIds = loadFromLocalStorage(deletedKeysKey, []);
+  if (!deletedIds.includes(debtId)) {
+    deletedIds.push(debtId);
+    saveToLocalStorage(deletedKeysKey, deletedIds);
+  }
+
+  // 2. حذف العنصر محلياً
   const userDebtsKey = `user_${targetUserId}_debts`;
   const debts = loadFromLocalStorage(userDebtsKey, []);
-
   const filteredDebts = debts.filter(d => d.id !== debtId && d._id !== debtId);
   saveToLocalStorage(userDebtsKey, filteredDebts);
 
+  // 3. تنظيف محلي شامل عبر المفاتيح
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -688,6 +708,7 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
     console.warn('LocalStorage global cleanup warning:', err.message);
   }
 
+  // 4. حذف البيانات من السحابة وقواعد البيانات
   const cloudDeleteResult = await deleteDataFromCloud(debtId, resolvedCompanyName, targetUserId);
 
   try {
@@ -706,7 +727,7 @@ export const deleteDebt = async (debtId, companyName = '', userId = 'guest') => 
   if (isNeonConfigured() && targetUserId !== 'guest') {
     try {
       const tableName = `user_${targetUserId.replace(/-/g, '_')}_debts`;
-      await executeQuery(`DELETE FROM ${tableName} WHERE id = $1 OR id = $2`, [debtId, debtId]);
+      await executeQuery(`DELETE FROM ${tableName} WHERE id = $1`, [debtId]);
     } catch (error) {
       console.error('Failed to delete debt from Neon DB:', error);
     }
