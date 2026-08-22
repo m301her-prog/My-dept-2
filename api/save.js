@@ -68,6 +68,7 @@ export default async function handler(req, res) {
                 type TEXT NOT NULL,
                 person_name TEXT NOT NULL,
                 phone TEXT,
+                person_phone TEXT,
                 amount NUMERIC NOT NULL,
                 currency TEXT DEFAULT 'DZD',
                 due_date DATE,
@@ -82,7 +83,9 @@ export default async function handler(req, res) {
             );
         `);
 
-        // 💡 تعديل قيود الأعمدة وتحديد قيم افتراضية مرنة لجميع الحقول الأساسية
+        // 💡 التعديلات التلقائية: للتأكد من وجود جميع الأعمدة المطلوبة في الجداول المجهزة سابقاً
+        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS phone TEXT;`);
+        await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS person_phone TEXT;`);
         await client.query(`ALTER TABLE debts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN created_at DROP NOT NULL;`);
         await client.query(`ALTER TABLE debts ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP;`);
@@ -123,18 +126,19 @@ export default async function handler(req, res) {
             const firstPaymentDate = cleanDate(d.firstPaymentDate || d.first_payment_date);
             const createdAtVal = cleanDate(d.createdAt || d.created_at) || new Date().toISOString();
 
-            // 💡 تمرير created_at صراحة في الاستعلام مع تفعيل CURRENT_TIMESTAMP كبديل
+            // 💡 الحفظ في العمادين (phone و person_phone) للتوثيق والتوافق
             query = `
                 INSERT INTO debts (
-                    id, user_id, title, type, person_name, phone, amount, currency, due_date, 
+                    id, user_id, title, type, person_name, phone, person_phone, amount, currency, due_date, 
                     notes, status, is_scheduled, schedule_type, installments_count, first_payment_date, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
                 ON CONFLICT (id) DO UPDATE SET
                     user_id = COALESCE(EXCLUDED.user_id, debts.user_id),
                     title = COALESCE(EXCLUDED.title, debts.title),
                     type = EXCLUDED.type,
                     person_name = EXCLUDED.person_name,
                     phone = EXCLUDED.phone,
+                    person_phone = EXCLUDED.person_phone,
                     amount = EXCLUDED.amount,
                     currency = EXCLUDED.currency,
                     due_date = EXCLUDED.due_date,
