@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 export default function DebtList() {
-  const { t, debts, language, openWhatsApp, currentUser, refreshDebts } = useApp();
+  const { t, debts, setDebts, language, openWhatsApp, currentUser } = useApp();
   const navigate = useNavigate();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -31,7 +31,7 @@ export default function DebtList() {
 
   // Filter and sort debts
   const filteredDebts = useMemo(() => {
-    let result = debts.filter(debt => {
+    let result = (debts || []).filter(debt => {
       if (filterType !== 'all' && debt.type !== filterType) return false;
       if (filterStatus !== 'all' && debt.status !== filterStatus) return false;
       if (searchQuery) {
@@ -101,7 +101,7 @@ export default function DebtList() {
     openWhatsApp(debt.phone || '', message);
   };
 
-  // دالة الحذف المباشرة بدون أي خدمة وسيطة
+  // دالة الحذف المباشرة بدون إعادة جلب البيانات من السيرفر
   const handleDeleteDebt = async (e, debt) => {
     e.preventDefault();
     e.stopPropagation();
@@ -121,7 +121,7 @@ export default function DebtList() {
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // طلب HTTP المباشر فوراً للرابط
+        // 1. إرسال طلب الحذف إلى السيرفر
         await fetch('https://my-dept-2.vercel.app/api/Delete', {
           method: 'POST',
           headers: {
@@ -139,9 +139,15 @@ export default function DebtList() {
             userId: userId
           })
         });
-        
-        if (refreshDebts) {
-          await refreshDebts();
+
+        // 2. تحديث الحصيلة المحلية مباشرة في الواجهة بدون طلب جلب من السيرفر
+        if (setDebts) {
+          setDebts(prevDebts => 
+            prevDebts.filter(item => {
+              const itemId = item.id || item._id || item.debt_id || item.debtId;
+              return itemId !== debtIdToDelete;
+            })
+          );
         }
       } catch (error) {
         console.error('Error deleting debt:', error);
@@ -152,11 +158,11 @@ export default function DebtList() {
   };
 
   // Calculate totals
-  const totalOwedToMe = debts
+  const totalOwedToMe = (debts || [])
     .filter(d => d.type === 'owed_to_me' && d.status !== 'paid')
     .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
 
-  const totalIOwe = debts
+  const totalIOwe = (debts || [])
     .filter(d => d.type === 'i_owe' && d.status !== 'paid')
     .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
 
@@ -274,7 +280,7 @@ export default function DebtList() {
       {filteredDebts.length > 0 ? (
         <div className="px-4 space-y-3">
           {filteredDebts.map((debt, index) => {
-            const debtId = debt.id || debt._id || index;
+            const debtId = debt.id || debt._id || debt.debt_id || debt.debtId || index;
             const isDeleting = deletingId === debtId;
 
             return (
