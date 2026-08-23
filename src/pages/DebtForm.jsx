@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext.jsx';
-import { useNavigate, useParams } from 'react-router-down';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   TrendingUp,
@@ -195,7 +195,7 @@ export default function DebtForm() {
     if (!validate()) return;
 
     try {
-      // استخدام ה-ID الموجود في حالة التعديل أو توليد UUID عالي الأمان للدين الجديد
+      // استخدام الـ ID الموجود في حالة التعديل أو توليد UUID عالي الأمان للدين الجديد
       const debtData = {
         id: id || generateUniqueId(),
         type: formData.type,
@@ -677,107 +677,81 @@ export default function DebtForm() {
                     <button
                       type="button"
                       onClick={handleAddPaymentAction}
-                      className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold rounded-xl text-xs shadow hover:opacity-90 active:scale-95 transition-all flex items-center justify-center"
+                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition-all flex items-center gap-1 active:scale-95"
                     >
-                      {language === 'ar' ? 'حفظ الحركة' : 'Apply'}
+                      <Plus className="w-4 h-4" />
+                      {language === 'ar' ? 'حفظ الدفعة' : 'Save'}
                     </button>
                   </div>
 
-                  <div className="overflow-x-auto rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-700">
-                    <table className="w-full text-xs text-start">
-                      <thead className="text-[10px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-600 uppercase font-bold">
-                        <tr>
-                          <th scope="col" className="px-3 py-2 text-start">{language === 'ar' ? 'التاريخ' : 'Date'}</th>
-                          <th scope="col" className="px-3 py-2 text-start">{language === 'ar' ? 'النوع' : 'Type'}</th>
-                          <th scope="col" className="px-3 py-2 text-end">{language === 'ar' ? 'المبلغ' : 'Amount'}</th>
-                          <th scope="col" className="px-3 py-2 text-center">{language === 'ar' ? 'إجراء' : 'Action'}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100 dark:divide-gray-600">
-                        {paymentsList.length === 0 ? (
-                          <tr>
-                            <td colSpan="4" className="px-3 py-4 text-center text-gray-400 text-[11px]">
-                              {language === 'ar' ? 'لا توجد دفعات مسجلة بعد' : 'No payments registered yet'}
-                            </td>
-                          </tr>
-                        ) : (
-                          paymentsList.map((p) => (
-                            <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-600/50 transition-colors">
-                              <td className="px-3 py-2 font-medium text-gray-600 dark:text-gray-300">{p.date}</td>
-                              <td className="px-3 py-2">
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  p.type === 'settle'
-                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
-                                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-                                }`}>
-                                  {p.type === 'settle'
-                                    ? (language === 'ar' ? 'تسديد' : 'Settle')
-                                    : (language === 'ar' ? 'إضافة' : 'Record')}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-end font-bold text-gray-900 dark:text-white">
-                                {p.amount} {formData.currency}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => setPaymentsList(prev => prev.filter(item => item.id !== p.id))}
-                                  className="text-red-500 hover:text-red-700 p-1 transition"
-                                  title={language === 'ar' ? 'حذف هذه الحركة' : 'Delete transaction'}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                  {/* قائمة الدفعات المسجلة */}
+                  {paymentsList.length > 0 && (
+                    <div className="mt-3 space-y-2 max-h-40 overflow-y-auto pr-1">
+                      {paymentsList.map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between p-2.5 bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 text-xs shadow-sm"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${item.type === 'settle' ? 'bg-blue-500' : 'bg-emerald-500'}`} />
+                            <span className="font-bold text-gray-800 dark:text-gray-200">
+                              {item.amount} {formData.currency}
+                            </span>
+                            <span className="text-gray-400 text-[10px]">
+                              ({item.type === 'settle' ? (language === 'ar' ? 'تسديد' : 'Settle') : (language === 'ar' ? 'إضافة' : 'Record')})
+                            </span>
+                          </div>
+                          <span className="text-gray-400 text-[10px] dir-ltr">{item.date}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* Submit Button */}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold rounded-2xl shadow-lg hover:opacity-95 active:scale-[0.99] transition flex items-center justify-center gap-2 text-lg disabled:opacity-50"
-        >
-          <Save className="w-5 h-5" />
-          <span>{isEditing ? t('save') : t('add')}</span>
-        </button>
+        {/* Action Buttons */}
+        <div className="pt-4 flex gap-3">
+          <button
+            type="submit"
+            disabled={loading}
+            className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 active:scale-98"
+          >
+            <Save className="w-5 h-5" />
+            <span>{isEditing ? t('saveChanges') : t('saveDebt')}</span>
+          </button>
+        </div>
       </form>
 
-      {/* Delete Modal */}
+      {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl animate-in zoom-in-95 duration-150">
-            <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center text-red-500 mx-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-sm w-full shadow-2xl space-y-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 text-red-500 mx-auto flex items-center justify-center">
               <AlertCircle className="w-6 h-6" />
             </div>
-            <div className="text-center">
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-1">
-                {language === 'ar' ? 'تأكيد الحذف' : 'Confirm Delete'}
-              </h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                {language === 'ar' ? 'هل أنت أصلًا متاكد من حذف هذا الدين؟ لن يمكنك التراجع عن هذا الإجراء.' : 'Are you sure you want to delete this debt?'}
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-3 pt-2">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+              {language === 'ar' ? 'حذف الدين' : 'Delete Debt'}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {language === 'ar'
+                ? 'هل أنت تأكد من أنك تريد حذف هذا الدين؟ لا يمكن التراجع عن هذا الإجراء.'
+                : 'Are you sure you want to delete this debt? This action cannot be undone.'}
+            </p>
+            <div className="flex gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => setShowDeleteConfirm(false)}
-                className="py-3 px-4 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-bold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+                className="flex-1 py-2.5 border border-gray-300 dark:border-gray-600 rounded-xl font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition"
               >
                 {language === 'ar' ? 'إلغاء' : 'Cancel'}
               </button>
               <button
                 type="button"
                 onClick={handleDelete}
-                className="py-3 px-4 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition"
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition"
               >
                 {language === 'ar' ? 'حذف' : 'Delete'}
               </button>
