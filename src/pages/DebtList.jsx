@@ -115,7 +115,7 @@ export default function DebtList() {
     openWhatsApp(phone, message);
   };
 
-  // دالة التعامل مع حذف الدين المتوافقة مع أندرويد والتخزين المحلي والسحابي
+  // دالة التعامل مع حذف الدين وتوجيه الطلب لنقطة النهاية المحددة عبر HTTP
   const handleDeleteDebt = async (e, debt) => {
     e.stopPropagation(); // منع الانتقال لصفحة تفاصيل الدين
     const debtIdToDelete = debt.id || debt._id || debt.debt_id || debt.debtId || '';
@@ -151,16 +151,36 @@ export default function DebtList() {
           console.warn('LocalStorage bypass:', e);
         }
 
-        // 2. إرسال أمر الحذف المباشر للسيرفر بشكل واضح
+        // 2. إرسال طلب HTTP مباشر إلى API الحذف المحدد
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        await deleteDebt({
-          action: 'DELETE',
-          id: debtIdToDelete,
-          companyName: companyName,
-          userId: userId
+        const response = await fetch('https://my-dept-2.vercel.app/api/Delete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            action: 'DELETE',
+            id: debtIdToDelete,
+            companyName: companyName,
+            userId: userId
+          })
         });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        // استدعاء دالة الخدمة الأصلية كـ Fallback إن وُجدت
+        if (typeof deleteDebt === 'function') {
+          await deleteDebt({
+            action: 'DELETE',
+            id: debtIdToDelete,
+            companyName: companyName,
+            userId: userId
+          }).catch(err => console.warn('Neon delete fallback error:', err));
+        }
         
         // 3. تحديث القائمة من السيرفر بالتنسيق
         if (refreshDebts) {
@@ -168,7 +188,7 @@ export default function DebtList() {
         }
 
       } catch (error) {
-        console.error('Error deleting debt:', error);
+        console.error('Error deleting debt via API:', error);
         alert(language === 'ar' ? 'تعذر الحذف من السيرفر، يرجى المحاولة لاحقاً' : 'Failed to delete debt from server');
         // إعادة البيانات محلياً إذا فشلت عملية الشبكة
         if (setDebts) {
