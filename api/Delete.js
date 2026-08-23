@@ -37,10 +37,8 @@ export default async function handler(req, res) {
 
     const d = body.debtData || body.debt || body.updates || body.data || body;
     
-    // استخراج معرف الدين المراد حذفه
+    // استخراج معرف الدين (id) والمرشحات
     const targetId = body.id || body.debtId || d.id || d._id || req.query?.id || req.query?.debtId;
-    
-    // استخراج بيانات الشركة والمستخدم والمعرفات المتاحة
     let userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
     let finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
     let targetSchema = req.headers['x-tenant-schema'];
@@ -51,7 +49,7 @@ export default async function handler(req, res) {
 
     await client.connect();
 
-    // 2. إذا لم يرسل الفرونت اسم الشركة ولكن أرسل userId، نجلب اسم الشركة من جدول app_users الرئيسي
+    // 2. المحاولة الأولى: تخمين السكيمّا من اسم الشركة أو userId
     if (!targetSchema && !finalCompanyName && userId) {
       const userRes = await client.query(
         'SELECT company_name FROM public.app_users WHERE id = $1 LIMIT 1',
@@ -62,41 +60,67 @@ export default async function handler(req, res) {
       }
     }
 
-    // 💡 3. مطابقة معادلة بناء اسم الـ Schema تماماً كما في كود التسجيل
-    let schemaName = targetSchema;
+    let guessedSchema = targetSchema;
+    if (!guessedSchema && finalCompanyName) {
+      const sanitizedCompany = finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+      if (sanitizedCompany) guessedSchema = `schema_${sanitizedCompany}`;
+    }
+    if (!guessedSchema && userId) {
+      const cleanUser = userId.toString().trim().replace('usr_', '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+      if (cleanUser) guessedSchema = `schema_user_${cleanUser}`;
+    }
 
-    if (!schemaName || schemaName.trim() === '') {
-      const sanitizedCompany = finalCompanyName ? finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
-      
-      const cleanUser = userId ? userId.toString().trim().replace('usr_', '').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() : '';
+    const deleteQuery = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
+    let deletedRecord = null;
+    let actualSchemaUsed = null;
 
-      if (sanitizedCompany) {
-        schemaName = `schema_${sanitizedCompany}`;
-      } else if (cleanUser) {
-        schemaName = `schema_user_${cleanUser}`;
+    // 3. كود التنفيذ الأول في السكيمّا المتوقعة
+    if (guessedSchema) {
+      const cleanSchema = guessedSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+      try {
+        await client.query(`SET search_path TO "${cleanSchema}";`);
+        const resPrimary = await client.query(deleteQuery, [targetId]);
+        if (resPrimary.rowCount > 0) {
+          deletedRecord = resPrimary.rows[0];
+          actualSchemaUsed = cleanSchema;
+        }
+      } catch (e) {
+        // تجاهل الخطأ في حال كانت السكيمّا غير موجودة والترخيص للمحيط الشامل
       }
     }
 
-    if (!schemaName) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'لم يتم تحديد السكيمّا أو اسم الشركة أو userId للوصول إلى قاعدة البيانات الصحيحة' 
-      });
+    // 💡 4. الحل الجذري (Fallback Scan): البحث في جميع السكيمات التي تبدأ بـ schema_ في حال فشل التخمين
+    if (!deletedRecord) {
+      const allSchemasResult = await client.query(`
+        SELECT schema_name 
+        FROM information_schema.schemata 
+        WHERE schema_name LIKE 'schema_%';
+      `);
+
+      for (const row of allSchemasResult.rows) {
+        const schemaName = row.schema_name;
+        if (schemaName === actualSchemaUsed) continue;
+
+        try {
+          await client.query(`SET search_path TO "${schemaName}";`);
+          const scanRes = await client.query(deleteQuery, [targetId]);
+          if (scanRes.rowCount > 0) {
+            deletedRecord = scanRes.rows[0];
+            actualSchemaUsed = schemaName;
+            break; // اخرج فور إيجاد السجل وحذفه
+          }
+        } catch (err) {
+          // السكيمّا قد لا تحتوي على جدول debts
+          continue;
+        }
+      }
     }
 
-    const cleanSchema = schemaName.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-
-    // 💡 4. التوجه إلى السكيمّا المحددة وتنفيذ عملية الحذف
-    await client.query(`SET search_path TO "${cleanSchema}";`);
-
-    const deleteQuery = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
-    const result = await client.query(deleteQuery, [targetId]);
-
-    if (result.rowCount === 0) {
+    // 5. إرجاع النتيجة
+    if (!deletedRecord) {
       return res.status(404).json({
         success: false,
-        message: 'لم يتم العثور على السجل المطلوب حذفه داخل هذه السكيمّا',
-        schemaUsed: cleanSchema,
+        error: 'لم يتم العثور على السجل في أي سكيمّا مسجلة في النظام (ربما تم حذفه مسبقاً)',
         targetId: targetId
       });
     }
@@ -104,9 +128,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       message: 'تم الحذف بنجاح',
-      schemaUsed: cleanSchema,
-      deletedDebt: result.rows[0],
-      rowCount: result.rowCount
+      schemaUsed: actualSchemaUsed,
+      deletedDebt: deletedRecord
     });
 
   } catch (error) {
