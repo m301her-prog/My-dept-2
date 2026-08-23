@@ -44,9 +44,11 @@ export default function DebtList() {
       if (filterStatus !== 'all' && debt.status !== filterStatus) return false;
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
+        const personName = debt.personName || debt.person_name || '';
+        const notes = debt.notes || '';
         return (
-          debt.personName?.toLowerCase().includes(query) ||
-          debt.notes?.toLowerCase().includes(query)
+          personName.toLowerCase().includes(query) ||
+          notes.toLowerCase().includes(query)
         );
       }
       return true;
@@ -55,15 +57,15 @@ export default function DebtList() {
     // Sort
     switch (sortBy) {
       case 'newest':
-        return result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return result.sort((a, b) => new Date(b.createdAt || b.created_at) - new Date(a.createdAt || a.created_at));
       case 'oldest':
-        return result.sort((a, b) => new Date(a.createdAt) - new Date(a.createdAt));
+        return result.sort((a, b) => new Date(a.createdAt || a.created_at) - new Date(b.createdAt || b.created_at));
       case 'amount_desc':
         return result.sort((a, b) => b.amount - a.amount);
       case 'amount_asc':
         return result.sort((a, b) => a.amount - b.amount);
       case 'due_date':
-        return result.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+        return result.sort((a, b) => new Date(a.dueDate || a.due_date) - new Date(b.dueDate || b.due_date));
       default:
         return result;
     }
@@ -80,6 +82,7 @@ export default function DebtList() {
   };
 
   const formatDate = (dateString) => {
+    if (!dateString) return '';
     const locale = language === 'ar' ? 'ar-DZ' : language === 'fr' ? 'fr-FR' : 'en-US';
     return new Date(dateString).toLocaleDateString(locale, {
       month: 'short',
@@ -90,22 +93,26 @@ export default function DebtList() {
 
   const getStatusIcon = (debt) => {
     if (debt.status === 'paid') return <CheckCircle className="w-4 h-4 text-emerald-500" />;
-    const dueDate = new Date(debt.dueDate);
+    const dueDate = new Date(debt.dueDate || debt.due_date);
     if (dueDate < new Date()) return <AlertTriangle className="w-4 h-4 text-red-500" />;
     return <Clock className="w-4 h-4 text-yellow-500" />;
   };
 
   const getStatusColor = (debt) => {
     if (debt.status === 'paid') return 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400';
-    const dueDate = new Date(debt.dueDate);
+    const dueDate = new Date(debt.dueDate || debt.due_date);
     if (dueDate < new Date()) return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400';
     return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400';
   };
 
   const handleWhatsApp = (e, debt) => {
     e.stopPropagation();
-    const message = `${t('whatsappGreeting')}\n\n${t('whatsappBody')}\n${t('personName')}: ${debt.personName}\n${t('amount')}: ${formatCurrency(debt.amount, debt.currency)}\n${t('dueDate')}: ${formatDate(debt.dueDate)}${debt.notes ? '\n\n' + t('notes') + ': ' + debt.notes : ''}\n\n${t('whatsappClosing')}`;
-    openWhatsApp(debt.phone || '', message);
+    const personName = debt.personName || debt.person_name || 'غير محدد';
+    const phone = debt.phone || debt.personPhone || debt.person_phone || '';
+    const dueDate = debt.dueDate || debt.due_date;
+    
+    const message = `${t('whatsappGreeting')}\n\n${t('whatsappBody')}\n${t('personName')}: ${personName}\n${t('amount')}: ${formatCurrency(debt.amount, debt.currency)}\n${t('dueDate')}: ${formatDate(dueDate)}${debt.notes ? '\n\n' + t('notes') + ': ' + debt.notes : ''}\n\n${t('whatsappClosing')}`;
+    openWhatsApp(phone, message);
   };
 
   // دالة التعامل مع حذف الدين المتوافقة مع أندرويد والتخزين المحلي والسحابي
@@ -113,7 +120,7 @@ export default function DebtList() {
     e.stopPropagation(); // منع الانتقال لصفحة تفاصيل الدين
     const debtIdToDelete = debt.id || debt._id || debt.debt_id || debt.debtId || '';
     
-    if (deletingIds.includes(debtIdToDelete)) return; // منع التكرار الضغط
+    if (!debtIdToDelete || deletingIds.includes(debtIdToDelete)) return; // منع التكرار والضغط المزدوج
 
     const nameDisplay = debt.personName || debt.person_name || 'هذا الدين';
     const confirmMessage = language === 'ar' 
@@ -127,37 +134,35 @@ export default function DebtList() {
       try {
         setDeletingIds(prev => [...prev, debtIdToDelete]);
 
-        // 1. الحذف الفوري محلياً من الـ State والتخزين المحلي لأندرويد (مستبقاً للسحابة لمنع الحفظ التلقائي)
+        // 1. الحذف الفوري محلياً من الـ State والتخزين المحلي
         if (setDebts) {
-          setDebts(prev => prev.filter(d => (d.id || d._id || d.debtId) !== debtIdToDelete));
+          setDebts(prev => prev.filter(d => (d.id || d._id || d.debtId || d.debt_id) !== debtIdToDelete));
         }
 
-        // تحديث الـ LocalStorage المباشر إن وجد
+        // تحديث الـ LocalStorage المباشر
         try {
           const storedLocal = localStorage.getItem('debts');
           if (storedLocal) {
             const parsed = JSON.parse(storedLocal);
-            const filtered = parsed.filter(d => (d.id || d._id || d.debtId) !== debtIdToDelete);
+            const filtered = parsed.filter(d => (d.id || d._id || d.debtId || d.debt_id) !== debtIdToDelete);
             localStorage.setItem('debts', JSON.stringify(filtered));
           }
         } catch (e) {
           console.warn('LocalStorage bypass:', e);
         }
 
-        // 2. إرسال أمر الحذف للسيرفر
-        const personName = debt.personName || debt.person_name || '';
+        // 2. إرسال أمر الحذف المباشر للسيرفر بشكل واضح
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
         await deleteDebt({
           action: 'DELETE',
           id: debtIdToDelete,
-          personName: personName,
           companyName: companyName,
           userId: userId
         });
         
-        // 3. مزامنة القائمة من السيرفر للتأكد النهائي
+        // 3. تحديث القائمة من السيرفر بالتنسيق
         if (refreshDebts) {
           await refreshDebts(); 
         }
@@ -178,11 +183,11 @@ export default function DebtList() {
   // Calculate totals
   const totalOwedToMe = debts
     .filter(d => d.type === 'owed_to_me' && d.status !== 'paid')
-    .reduce((sum, d) => sum + d.amount, 0);
+    .reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0);
 
   const totalIOwe = debts
     .filter(d => d.type === 'i_owe' && d.status !== 'paid')
-    .reduce((sum, d) => sum + d.amount, 0);
+    .reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0);
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pb-24">
@@ -298,8 +303,11 @@ export default function DebtList() {
       {filteredDebts.length > 0 ? (
         <div className="px-4 space-y-3">
           {filteredDebts.map((debt, index) => {
-            const currentId = debt.id || debt._id || index;
+            const currentId = debt.id || debt._id || debt.debtId || index;
             const isDeleting = deletingIds.includes(currentId);
+            const personName = debt.personName || debt.person_name || 'غير محدد';
+            const phone = debt.phone || debt.personPhone || debt.person_phone;
+            const dueDate = debt.dueDate || debt.due_date;
 
             return (
               <div
@@ -329,10 +337,10 @@ export default function DebtList() {
                       <div className="flex items-start justify-between gap-2 mb-2">
                         <div>
                           <h3 className="font-bold text-gray-900 dark:text-white text-lg">
-                            {debt.personName}
+                            {personName}
                           </h3>
                           <p className="text-sm text-gray-500 dark:text-gray-400">
-                            {formatDate(debt.dueDate)}
+                            {formatDate(dueDate)}
                           </p>
                         </div>
                         <div className="text-right">
@@ -351,7 +359,7 @@ export default function DebtList() {
                             {getStatusIcon(debt)}
                             {debt.status === 'paid' ? t('paid') : t('pending')}
                           </span>
-                          {debt.currency !== 'DZD' && (
+                          {debt.currency && debt.currency !== 'DZD' && (
                             <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
                               {debt.currency}
                             </span>
@@ -360,7 +368,7 @@ export default function DebtList() {
 
                         {/* Quick Actions & Delete Button */}
                         <div className="flex items-center gap-1">
-                          {debt.phone && (
+                          {phone && (
                             <>
                               <button
                                 onClick={(e) => handleWhatsApp(e, debt)}
@@ -370,7 +378,7 @@ export default function DebtList() {
                                 <MessageCircle className="w-5 h-5" />
                               </button>
                               <a
-                                href={`tel:${debt.phone}`}
+                                href={`tel:${phone}`}
                                 onClick={(e) => e.stopPropagation()}
                                 className="p-2 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-500 transition"
                                 title={t('call')}
