@@ -16,6 +16,13 @@ if (baseConnectionString) {
     });
 }
 
+// دالة مساعدة لقص النصوص وتفادي خطأ الطول المتجاوز (VARCHAR Limit)
+const safeTruncate = (str, limit = 50) => {
+    if (!str) return null;
+    const stringVal = str.toString().trim();
+    return stringVal.length > limit ? stringVal.substring(0, limit) : stringVal;
+};
+
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -41,16 +48,17 @@ export default async function handler(req, res) {
 
         const d = body.debtData || body.debt || body.updates || body.data || body;
         
-        // تحديد نوع العملية سواء أُرسلت في req.method أو داخل body.action
+        // تحديد نوع العملية
         let action = (body.action || d.action || req.method).toString().toUpperCase().trim();
         if (req.method === 'DELETE') action = 'DELETE';
 
-        // 1. استخراج المعرفات المباشرة بدون توليد تلقائي
-        const targetId = body.id || body.debtId || d.id || d._id || null;
-        const personName = body.personName || body.person_name || d.personName || d.person_name || null;
+        // 1. استخراج المعرفات المباشرة مع آمان الطول
+        const rawId = body.id || body.debtId || d.id || d._id || null;
+        const targetId = safeTruncate(rawId, 50); // تقليم الـ ID لتجنب تجاوز 50 حرفاً
+        const personName = safeTruncate(body.personName || body.person_name || d.personName || d.person_name, 50);
 
         // 2. تحديد وتوحيد السكيمّا المستهدفة
-        let userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
+        let rawUserId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
         const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
         let targetSchema = req.headers['x-tenant-schema'];
@@ -60,8 +68,8 @@ export default async function handler(req, res) {
                 const sanitizedCompany = finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
                 targetSchema = sanitizedCompany ? `schema_${sanitizedCompany}` : null;
             }
-            if (!targetSchema && userId) {
-                const cleanUser = userId.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+            if (!targetSchema && rawUserId) {
+                const cleanUser = rawUserId.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
                 targetSchema = `schema_user_${cleanUser.replace('usr_', '')}`;
             }
             if (!targetSchema) targetSchema = 'public';
@@ -85,17 +93,25 @@ export default async function handler(req, res) {
                 });
             }
 
-            // محاولة الحذف المباشر بـ ID أولاً ثم الاسم داخل السكيمّا المحددة
-            let deleteQuery = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
-            let result = await client.query(deleteQuery, [targetId]);
+            let result = { rowCount: 0, rows: [] };
 
-            // في حال عدم وجود الـ ID أو فشل المطابقة به، يتم الحذف باسم الشخص
+            // محاولة الحذف بالـ ID أولاً
+            if (targetId) {
+                try {
+                    const deleteQuery = `DELETE FROM debts WHERE id::text = $1 RETURNING *;`;
+                    result = await client.query(deleteQuery, [targetId.toString()]);
+                } catch (e) {
+                    console.warn('[DELETE ID WARN]:', e.message);
+                }
+            }
+
+            // في حال عدم العثور بالـ ID وكان اسم الشخص متوفراً
             if (result.rowCount === 0 && personName) {
-                deleteQuery = `DELETE FROM debts WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) RETURNING *;`;
+                const deleteQuery = `DELETE FROM debts WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) RETURNING *;`;
                 result = await client.query(deleteQuery, [personName]);
             }
 
-            // خيار الأمان التجريفي: البحث والحذف في باقي السكيمات لضمان التطهير في حال التخزين الخاطئ سابقاً
+            // خيار الفحص الشامل في باقي السكيمات
             if (result.rowCount === 0) {
                 const schemasResult = await client.query(`
                     SELECT schema_name FROM information_schema.schemata 
@@ -106,7 +122,9 @@ export default async function handler(req, res) {
                     await client.query(`SET search_path TO "${sysSchema}";`);
                     
                     if (targetId) {
-                        result = await client.query(`DELETE FROM debts WHERE id = $1 RETURNING *;`, [targetId]);
+                        try {
+                            result = await client.query(`DELETE FROM debts WHERE id::text = $1 RETURNING *;`, [targetId.toString()]);
+                        } catch (e) {}
                     }
                     if (result.rowCount === 0 && personName) {
                         result = await client.query(`DELETE FROM debts WHERE LOWER(TRIM(person_name)) = LOWER(TRIM($1)) RETURNING *;`, [personName]);
@@ -141,15 +159,17 @@ export default async function handler(req, res) {
         // ==========================================
         // تنفيذ عملية الحفظ (SAVE / INSERT)
         // ==========================================
-        const saveId = targetId || `debt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        const pName = (d.personName || d.person_name || 'غير محدد').toString().trim();
-        const title = (d.title || d.notes || `دين: ${pName}`).toString().trim();
+        const rawSaveId = targetId || `debt_${Date.now()}`;
+        const saveId = safeTruncate(rawSaveId, 50);
+        const userId = safeTruncate(rawUserId || cleanSchema, 50);
+        const pName = safeTruncate(d.personName || d.person_name || 'غير محدد', 50);
+        const title = safeTruncate(d.title || `دين: ${pName}`, 50);
         const amount = parseFloat(d.amount) || 0.00;
-        const type = (d.type || 'owed_to_me').toString().trim();
-        const personPhone = d.personPhone || d.person_phone || d.phone || null;
+        const type = safeTruncate(d.type || 'owed_to_me', 20);
+        const personPhone = safeTruncate(d.personPhone || d.person_phone || d.phone, 30);
         const dueDate = d.dueDate || d.due_date || null;
-        const status = d.status || 'pending';
-        const notes = d.notes || null;
+        const status = safeTruncate(d.status || 'pending', 20);
+        const notes = d.notes ? d.notes.toString() : null; // الملاحظات تبقى طويلة طالما نوعها TEXT
         const createdAt = d.createdAt || d.created_at || new Date().toISOString();
 
         const saveQuery = `
@@ -169,7 +189,7 @@ export default async function handler(req, res) {
             RETURNING *;
         `;
 
-        const saveParams = [saveId, userId || cleanSchema, title, amount, type, pName, personPhone, dueDate, status, notes, createdAt];
+        const saveParams = [saveId, userId, title, amount, type, pName, personPhone, dueDate, status, notes, createdAt];
         const saveResult = await client.query(saveQuery, saveParams);
 
         return res.status(200).json({
