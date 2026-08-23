@@ -28,7 +28,7 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
 
     if (!pool) {
-        return res.status(500).json({ success: false, error: 'DATABASE_URL غير معرف في متغيرات البيئة' });
+        return res.status(500).json({ success: false, error: 'DATABASE_URL غير معرف' });
     }
 
     const client = await pool.connect();
@@ -41,7 +41,7 @@ export default async function handler(req, res) {
 
         const d = body.debtData || body.debt || body.updates || body.data || body;
 
-        // 1. استخراج الـ ID الحقيقي للديون (مثل: debt_mt3ib9fn_180j1)
+        // 1. استخراج معايير البحث
         const deleteId = body.id || body.debtId || d.id || d._id;
         const personName = body.personName || body.person_name || body.name || d.personName || d.person_name || d.name;
         const personPhone = body.personPhone || body.person_phone || body.phone || d.personPhone || d.person_phone || d.phone;
@@ -49,66 +49,37 @@ export default async function handler(req, res) {
         if (!deleteId && !personName && !personPhone) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'يلزم إرسال المعرف (id) أو اسم الشخص أو رقم الهاتف لإكمال عملية الحذف' 
+                error: 'يلزم إرسال المعرف (id) أو الاسم أو الهاتف' 
             });
         }
 
-        // 2. استخراج بيانات المستخدم والشركة
-        let userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
-        let companyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
+        // 2. جلب جميع الـ Schemas الموجودة في قاعدة البيانات تلقائياً
+        const schemasResult = await client.query(`
+            SELECT schema_name 
+            FROM information_schema.schemata 
+            WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+        `);
 
-        // 3. تحديد الـ Schema بفس فلسفة كود التسجيل والحفظ
-        let targetSchema = req.headers['x-tenant-schema'];
+        const allSchemas = schemasResult.rows.map(r => r.schema_name);
 
-        // إذا لم تصل السكيمّا في الهيدر، نجلب بيانات الشركة من app_users لضمان الدقة
-        if ((!targetSchema || targetSchema.trim() === '') && userId) {
-            try {
-                const userRes = await client.query(
-                    'SELECT company_name FROM public.app_users WHERE id = $1 LIMIT 1', 
-                    [userId]
-                );
-                if (userRes.rows.length > 0 && userRes.rows[0].company_name) {
-                    companyName = userRes.rows[0].company_name;
-                }
-            } catch (err) {
-                console.error('Error fetching user company:', err);
-            }
-        }
-
-        if (!targetSchema || targetSchema.trim() === '') {
-            if (companyName && companyName.toString().trim() !== '') {
-                const sanitizedCompany = companyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-                targetSchema = sanitizedCompany ? `schema_${sanitizedCompany}` : null;
-            }
-            if (!targetSchema && userId) {
-                const cleanUser = userId.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-                targetSchema = `schema_user_${cleanUser.replace('usr_', '')}`;
-            }
-            if (!targetSchema) targetSchema = 'public';
-        }
-
-        const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-
-        // تجربة البحث والحذف في السكيمّا الرئيسية المحسوبة ثم public
-        const schemasToTry = Array.from(new Set([cleanSchema, 'public']));
         let deletedRecord = null;
-        let usedSchema = cleanSchema;
+        let foundInSchema = null;
 
-        for (const schema of schemasToTry) {
-            await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}";`);
-            await client.query(`SET search_path TO "${schema}";`);
+        // 3. البحث والحذف في كل Schemas قاعدة البيانات حتى نجد السجل
+        for (const schemaName of allSchemas) {
+            await client.query(`SET search_path TO "${schemaName}";`);
 
-            // التأكد من وجود جدول debts في هذه السكيمّا
-            const tableCheck = await client.query(`
+            // التأكد من أن هذه السكيمّا تحتوي على جدول debts
+            const tableExists = await client.query(`
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables 
                     WHERE table_schema = $1 AND table_name = 'debts'
                 );
-            `, [schema]);
+            `, [schemaName]);
 
-            if (!tableCheck.rows[0].exists) continue;
+            if (!tableExists.rows[0].exists) continue;
 
-            // بناء استعلام الحذف بتطابق النص الكامل لـ ID الموضح بالصورة
+            // تجهيز شروط الحذف
             let conditions = [];
             let params = [];
             let idx = 1;
@@ -141,28 +112,29 @@ export default async function handler(req, res) {
 
             if (result.rowCount > 0) {
                 deletedRecord = result.rows[0];
-                usedSchema = schema;
-                break;
+                foundInSchema = schemaName;
+                break; // تم الحذف بنجاح
             }
         }
 
+        // 4. النتيجة
         if (!deletedRecord) {
             return res.status(404).json({
                 success: false,
-                targetSchema: cleanSchema,
-                error: `لم يتم العثور على الدين المُراد حذفه في السكيمّا المعنية (${cleanSchema})`
+                searchedSchemas: allSchemas,
+                error: `لم يتم العثور على العنصر بالمعرف (${deleteId || personName}) داخل أي Schema في قاعدة البيانات!`
             });
         }
 
         return res.status(200).json({ 
             success: true, 
-            message: 'تمت عملية الحذف بنجاح',
-            schemaUsed: usedSchema, 
-            deletedDebt: deletedRecord
+            message: 'تم الحذف بنجاح!',
+            schemaUsed: foundInSchema, 
+            deletedData: deletedRecord
         });
 
     } catch (error) {
-        console.error(`[DELETE API ERROR]:`, error);
+        console.error(`[DELETE ERROR]:`, error);
         return res.status(500).json({ success: false, error: error.message });
     } finally {
         client.release();
