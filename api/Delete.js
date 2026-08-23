@@ -11,9 +11,9 @@ if (baseConnectionString) {
     pool = new pg.Pool({
         connectionString: finalConnectionString,
         ssl: { rejectUnauthorized: false },
-        max: 20,                  // أقصى عدد اتصالات
-        idleTimeoutMillis: 30000, // إغلاق الاتصال الخامل بعد 30 ثانية
-        connectionTimeoutMillis: 5000 // المهلة الزمنية للاتصال
+        max: 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000
     });
 }
 
@@ -29,8 +29,8 @@ export default async function handler(req, res) {
 
     if (req.method === 'OPTIONS') return res.status(200).end();
     
-    // قبول POST أو DELETE لعمليات الحذف
-    if (!['POST', 'DELETE'].includes(req.method)) {
+    // السماح بطريقتي POST و DELETE لعملية الحذف
+    if (req.method !== 'POST' && req.method !== 'DELETE') {
         return res.status(405).json({ error: 'Method Not Allowed' });
     }
 
@@ -38,6 +38,7 @@ export default async function handler(req, res) {
         return res.status(500).json({ success: false, error: 'DATABASE_URL غير معرف في متغيرات البيئة' });
     }
 
+    // اقتطاع اتصال من الـ Pool
     const client = await pool.connect();
 
     try {
@@ -48,20 +49,17 @@ export default async function handler(req, res) {
 
         const d = body.debtData || body.debt || body.updates || body.data || body;
         
-        // 2. استخراج الـ ID المراد حذفه من مختلف المصادر المحتملة (أو من query params لو أُرسل مع DELETE)
-        const targetId = req.query.id || body.id || body.debtId || d.id || d._id;
+        // استخراج معرف الدين (id) من عدة أماكن محتملة أو من الـ Query Params
+        const targetId = body.id || body.debtId || d.id || d._id || req.query?.id || req.query?.debtId;
         
         let userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
         const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
         if (!targetId) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'معرف الدين (id) مطلوب لإتمام عملية الحذف' 
-            });
+            return res.status(400).json({ success: false, error: 'المعرف (id) مطلوب لعملية الحذف' });
         }
 
-        // 3. تحديد وعزل السكيمّا (Schema Isolation) بنفس المنطق بالضبط
+        // تحديد وعزل السكيمّا (Schema Isolation)
         let targetSchema = req.headers['x-tenant-schema'];
 
         if (!targetSchema || targetSchema.trim() === '') {
@@ -78,15 +76,14 @@ export default async function handler(req, res) {
 
         const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
-        // إعداد وتوجيه البحث للسكيمّا المستهدفة
+        // إعداد السكيمّا المستهدفة
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
 
-        // تنفيذ استعلام الحذف وإرجاع البيانات المحذوفة للتأكد
+        // تنفيذ كويري الحذف وإرجاع العنصر المحذوف للتأكيد
         const query = `DELETE FROM debts WHERE id = $1 RETURNING *;`;
         const result = await client.query(query, [targetId]);
 
-        // إذا لم يتم العثور على العنصر لحذفه
         if (result.rowCount === 0) {
             return res.status(404).json({
                 success: false,
@@ -95,18 +92,19 @@ export default async function handler(req, res) {
             });
         }
 
-        return res.status(200).json({ 
-            success: true, 
-            message: 'تم حذف البيانات بنجاح',
-            schemaUsed: cleanSchema, 
-            deletedRow: result.rows[0],
-            rowCount: result.rowCount 
+        return res.status(200).json({
+            success: true,
+            message: 'تم الحذف بنجاح',
+            schemaUsed: cleanSchema,
+            deletedDebt: result.rows[0],
+            rowCount: result.rowCount
         });
 
     } catch (error) {
         console.error(`[DATABASE ERROR ON DELETE]:`, error);
         return res.status(500).json({ success: false, error: error.message });
     } finally {
+        // إرجاع الاتصال إلى Pool
         client.release();
     }
 }
