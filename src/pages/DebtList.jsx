@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { useNavigate } from 'react-router-dom';
-import { deleteDebt } from '../services/neonService';
 import {
   TrendingUp,
   TrendingDown,
@@ -102,7 +101,7 @@ export default function DebtList() {
     openWhatsApp(debt.phone || '', message);
   };
 
-  // دالة الحذف المُصلحة لمنع التداخل مع الحفظ أو أي دالة أخرى
+  // دالة الحذف المباشرة بدون أي خدمة وسيطة
   const handleDeleteDebt = async (e, debt) => {
     e.preventDefault();
     e.stopPropagation();
@@ -122,33 +121,24 @@ export default function DebtList() {
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // استخدام دالة الخدمة لمنع تعارض أكثر من طلب HTTP مستمر بنفس الوقت
-        if (typeof deleteDebt === 'function') {
-          await deleteDebt({
+        // طلب HTTP المباشر فوراً للرابط
+        await fetch('https://my-dept-2.vercel.app/api/Delete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': userId,
+            'x-tenant-schema': companyName ? `schema_${companyName.toLowerCase().replace(/[^a-zA-Z0-9_]/g, '')}` : ''
+          },
+          body: JSON.stringify({
+            action: 'DELETE',
             id: debtIdToDelete,
             personName: personName,
+            person_name: personName,
             companyName: companyName,
+            company_name: companyName,
             userId: userId
-          });
-        } else {
-          await fetch('https://my-dept-2.vercel.app/api/Delete', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-user-id': userId,
-              'x-tenant-schema': companyName ? `schema_${companyName.toLowerCase().replace(/[^a-zA-Z0-9_]/g, '')}` : ''
-            },
-            body: JSON.stringify({
-              action: 'DELETE',
-              id: debtIdToDelete,
-              personName: personName,
-              person_name: personName,
-              companyName: companyName,
-              company_name: companyName,
-              userId: userId
-            })
-          });
-        }
+          })
+        });
         
         if (refreshDebts) {
           await refreshDebts();
@@ -354,7 +344,7 @@ export default function DebtList() {
                             </a>
                           )}
                           
-                          {/* زر الحذف المضمون والمفصول */}
+                          {/* زر الحذف */}
                           <button
                             type="button"
                             disabled={isDeleting}
@@ -367,7 +357,7 @@ export default function DebtList() {
                         </div>
                       </div>
 
-                      {/* زر الواتساب الواضح والبديع */}
+                      {/* زر الواتساب */}
                       {debt.phone && (
                         <button
                           type="button"
