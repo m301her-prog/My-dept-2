@@ -24,7 +24,8 @@ import {
   Download,
   CreditCard,
   X,
-  Share2
+  Share2,
+  PlusCircle
 } from 'lucide-react';
 
 export default function Home() {
@@ -50,6 +51,11 @@ export default function Home() {
   const [selectedDebt, setSelectedDebt] = useState(null);
   const [installmentAmount, setInstallmentAmount] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // State للتحكم في نافذة إضافة دين جديد (زيادة على المبلغ الحالي)
+  const [selectedAddDebt, setSelectedAddDebt] = useState(null);
+  const [additionalDebtAmount, setAdditionalDebtAmount] = useState('');
+  const [isAddDebtModalOpen, setIsAddDebtModalOpen] = useState(false);
 
   // --- دالة مزامنة البيانات غير المحفوظة عند عودة النت ---
   const syncOfflineData = async () => {
@@ -325,6 +331,26 @@ export default function Home() {
     setSelectedDebt(null);
   };
 
+  // --- 4. دالة إضافة دين جديد وزيادته على المبلغ الموجود ---
+  const handleAddNewDebt = () => {
+    if (!additionalDebtAmount || isNaN(additionalDebtAmount) || additionalDebtAmount <= 0) return;
+
+    const addedAmount = parseFloat(additionalDebtAmount);
+    const newTotalAmount = Number(selectedAddDebt.amount) + addedAmount;
+
+    if (updateDebt) {
+      updateDebt(selectedAddDebt.id, {
+        ...selectedAddDebt,
+        amount: newTotalAmount,
+        status: selectedAddDebt.status === 'paid' ? 'pending' : selectedAddDebt.status
+      });
+    }
+
+    setIsAddDebtModalOpen(false);
+    setAdditionalDebtAmount('');
+    setSelectedAddDebt(null);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pb-24">
       {/* Header */}
@@ -465,7 +491,7 @@ export default function Home() {
                     <th className="p-3">الاسم</th>
                     <th className="p-3">المبلغ</th>
                     <th className="p-3">الحالة</th>
-                    <th className="p-3">إجراءات (مشاركة PDF / أقساط)</th>
+                    <th className="p-3">إجراءات (مشاركة PDF / أقساط / إضافة)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -503,6 +529,19 @@ export default function Home() {
                         >
                           <CreditCard className="w-4 h-4" />
                           <span>قسط</span>
+                        </button>
+
+                        {/* 3. زرار إضافة دين جديد (زيادة على الدين الحالي) */}
+                        <button
+                          onClick={() => {
+                            setSelectedAddDebt(debt);
+                            setIsAddDebtModalOpen(true);
+                          }}
+                          title="إضافة دين جديد يزيد على الحالي"
+                          className="flex items-center gap-1 p-1.5 bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400 rounded-lg hover:bg-purple-100 transition text-xs font-medium"
+                        >
+                          <PlusCircle className="w-4 h-4" />
+                          <span>دين جديد</span>
                         </button>
                       </td>
                     </tr>
@@ -555,6 +594,52 @@ export default function Home() {
                 <span>تسديد قسط ومشاركة</span>
                 <Share2 className="w-4 h-4" />
                 <span className="text-xs bg-emerald-700 px-1.5 py-0.5 rounded border border-emerald-400">PDF</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal إضافة دين جديد (زيادة على الدين الحالي) */}
+      {isAddDebtModalOpen && selectedAddDebt && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+            <button
+              onClick={() => setIsAddDebtModalOpen(false)}
+              className="absolute left-4 top-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
+              إضافة دين جديد للعميل
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              العميل: <span className="font-semibold text-gray-800 dark:text-gray-200">{selectedAddDebt.personName}</span>
+              <br />
+              الدين الحالي: <span className="font-bold text-emerald-600">{formatCurrency(selectedAddDebt.amount, selectedAddDebt.currency)}</span>
+            </p>
+
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                مبلغ الدين الإضافي:
+              </label>
+              <input
+                type="number"
+                value={additionalDebtAmount}
+                onChange={(e) => setAdditionalDebtAmount(e.target.value)}
+                placeholder="أدخل مبلغ الدين الجديد..."
+                className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleAddNewDebt}
+                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-xl font-bold shadow-lg transition flex items-center justify-center gap-2"
+              >
+                <PlusCircle className="w-5 h-5" />
+                <span>إضافة للمبلغ الحالي</span>
               </button>
             </div>
           </div>
