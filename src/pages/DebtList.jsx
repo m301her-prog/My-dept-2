@@ -123,13 +123,34 @@ export default function DebtList() {
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // إرسال الكائن المحتوي على المعلومات ليتوافق مع خدمة neonService والباك إند
-        await deleteDebt({
-          id: debtIdToDelete,
-          personName: personName,
-          companyName: companyName,
-          userId: userId
+        // إرسال طلب الحذف إلى الرابط المحدد شاملاً اسم الشخص واسم الشركة
+        const response = await fetch('https://my-dept-2.vercel.app/api/Delete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': userId,
+            'x-tenant-schema': companyName ? `schema_${companyName.toLowerCase().replace(/[^a-zA-Z0-9_]/g, '')}` : ''
+          },
+          body: JSON.stringify({
+            action: 'DELETE',
+            id: debtIdToDelete,
+            personName: personName,
+            person_name: personName,
+            companyName: companyName,
+            company_name: companyName,
+            userId: userId
+          })
         });
+
+        // استدعاء دالة neonService الاحتياطية
+        if (typeof deleteDebt === 'function') {
+          await deleteDebt({
+            id: debtIdToDelete,
+            personName: personName,
+            companyName: companyName,
+            userId: userId
+          });
+        }
         
         if (refreshDebts) {
           await refreshDebts(); // تحديث القائمة بعد نجاح الحذف
