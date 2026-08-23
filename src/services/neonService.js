@@ -6,7 +6,6 @@ const CLOUD_API = {
   loginUser: 'https://my-dept-2.vercel.app/api/login-user',
   saveData: 'https://my-dept-2.vercel.app/api/save',
   getData: 'https://my-dept-2.vercel.app/api/get',
-  deleteData: 'https://my-dept-2.vercel.app/api/Delete'
 };
 
 // Neon database connection string - set in .env as VITE_NEON_DATABASE_URL
