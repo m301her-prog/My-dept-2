@@ -1,6 +1,6 @@
 import pg from 'pg';
 
-// 1. استخدام Pool عالمي لإعادة استخدام الاتصالات
+// 1. استخدام Pool عالمي
 const baseConnectionString = process.env.DATABASE_URL;
 let pool;
 
@@ -43,22 +43,22 @@ export default async function handler(req, res) {
 
         const d = body.debtData || body.debt || body.updates || body.data || body;
 
-        // 2. استخراج المعرفات واسم الشخص
+        // 2. استخراج قيم البحث الحقيقية المطابقة للصورة المرفقة
         const deleteId = body.id || body.debtId || d.id || d._id;
-        const personName = body.personName || body.person_name || d.personName || d.person_name;
+        const personName = body.personName || body.person_name || body.name || d.personName || d.person_name || d.name;
+        const personPhone = body.personPhone || body.person_phone || body.phone || d.personPhone || d.person_phone || d.phone;
 
-        if (!deleteId && !personName) {
+        if (!deleteId && !personName && !personPhone) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'مطلوب توفير (id) أو (personName) لإتمام عملية الحذف' 
+                error: 'يتطلب الحذف توفير (id) أو (person_name) أو (person_phone)' 
             });
         }
 
-        // 3. استخراج بيانات المستخدم والشركة
+        // 3. تحديد وعزل السكيمّا
         let userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
         const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
-        // 4. تحديد وعزل السكيمّا
         let targetSchema = req.headers['x-tenant-schema'];
 
         if (!targetSchema || targetSchema.trim() === '') {
@@ -75,9 +75,9 @@ export default async function handler(req, res) {
 
         const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
-        // تجربة الحذف في السكيمّا الأساسية المحددة أولاً ثم public كخيار إضافي
+        // البحث في السكيمّا المحددة ثم public
         const schemasToTry = Array.from(new Set([cleanSchema, 'public']));
-        let deletedRecord = null;
+        let deletedRecords = [];
         let usedSchema = cleanSchema;
 
         for (const schema of schemasToTry) {
@@ -94,51 +94,61 @@ export default async function handler(req, res) {
 
             if (!tableCheck.rows[0].exists) continue;
 
-            // 1) محاولة الحذف برقم ID أولاً
+            // مطابقة الأعمدة المباشرة من قاعدة البيانات (person_name / person_phone)
+            let conditions = [];
+            let params = [];
+            let index = 1;
+
             if (deleteId) {
-                const deleteByIdQuery = `
-                    DELETE FROM debts 
-                    WHERE id::text = $1::text 
-                    RETURNING *;
-                `;
-                const resById = await client.query(deleteByIdQuery, [deleteId]);
-                if (resById.rowCount > 0) {
-                    deletedRecord = resById.rows[0];
-                    usedSchema = schema;
-                    break;
-                }
+                conditions.push(`id::text = $${index}`);
+                params.push(String(deleteId).trim());
+                index++;
             }
 
-            // 2) محاولة الحذف باسم الشخص (Fallback في حال عدم العثور بـ ID)
             if (personName) {
-                const deleteByNameQuery = `
-                    DELETE FROM debts 
-                    WHERE LOWER(person_name) = LOWER($1) OR LOWER(personName) = LOWER($1)
-                    RETURNING *;
-                `;
-                const resByName = await client.query(deleteByNameQuery, [personName]);
-                if (resByName.rowCount > 0) {
-                    deletedRecord = resByName.rows[0];
-                    usedSchema = schema;
-                    break;
-                }
+                // استخدام TRIM و LOWER لمطابقة الأسماء مثل ", gmal" أو "عمار حسن"
+                conditions.push(`(LOWER(TRIM(person_name)) = LOWER(TRIM($${index})) OR LOWER(TRIM("personName")) = LOWER(TRIM($${index})))`);
+                params.push(String(personName));
+                index++;
+            }
+
+            if (personPhone) {
+                // مطابقة عمود person_phone الموجود بالصورة
+                conditions.push(`(person_phone = $${index} OR "personPhone" = $${index} OR phone = $${index})`);
+                params.push(String(personPhone).trim());
+                index++;
+            }
+
+            // تنفيذ الحذف بشرط توفر أي من المعايير المُرسلة
+            const deleteQuery = `
+                DELETE FROM debts 
+                WHERE ${conditions.join(' OR ')}
+                RETURNING *;
+            `;
+
+            const result = await client.query(deleteQuery, params);
+
+            if (result.rowCount > 0) {
+                deletedRecords = result.rows;
+                usedSchema = schema;
+                break;
             }
         }
 
-        // إذا لم يتم العثور عليه مطلقاً
-        if (!deletedRecord) {
+        if (deletedRecords.length === 0) {
             return res.status(404).json({
                 success: false,
                 schemaUsed: cleanSchema,
-                error: `لم يتم العثور على الدين المراد حذفه بالمعرف (${deleteId}) أو الاسم (${personName})`
+                error: 'لم يتم العثور على أي سجل مطابق لبيانات الحذف المرفقة'
             });
         }
 
         return res.status(200).json({ 
             success: true, 
-            message: 'تم حذف البيانات بنجاح',
+            message: 'تم الحذف بنجاح من قاعدة البيانات',
             schemaUsed: usedSchema, 
-            deletedDebt: deletedRecord
+            deletedCount: deletedRecords.length,
+            deletedData: deletedRecords[0]
         });
 
     } catch (error) {
