@@ -101,14 +101,15 @@ export default function DebtList() {
     openWhatsApp(debt.phone || '', message);
   };
 
-  // دالة الحذف المباشرة بدون إعادة جلب البيانات من السيرفر
+  // دالة الحذف المعدلة للتحديث الفوري على بيئة أندرويد
   const handleDeleteDebt = async (e, debt) => {
     e.preventDefault();
     e.stopPropagation();
 
-    const debtIdToDelete = debt.id || debt._id || debt.debt_id || debt.debtId;
-    if (!debtIdToDelete || deletingId) return;
+    const rawId = debt.id || debt._id || debt.debt_id || debt.debtId;
+    if (!rawId || deletingId) return;
 
+    const debtIdToDelete = String(rawId);
     const nameDisplay = debt.personName || debt.person_name || 'هذا الدين';
     const confirmMessage = language === 'ar' 
       ? `هل أنت تأكد من رغبتك في حذف دين "${nameDisplay}"؟` 
@@ -116,22 +117,36 @@ export default function DebtList() {
       
     if (window.confirm(confirmMessage)) {
       setDeletingId(debtIdToDelete);
+
+      // الاحتفاظ بالنسخة القديمة لإعادتها في حال فشل الطلب
+      const previousDebts = debts;
+
+      // 1. التحديث الفوري المباشر في واجهة المستخدم
+      if (setDebts) {
+        setDebts(prevDebts => 
+          prevDebts.filter(item => {
+            const itemId = String(item.id || item._id || item.debt_id || item.debtId || '');
+            return itemId !== debtIdToDelete;
+          })
+        );
+      }
+
       try {
         const personName = debt.personName || debt.person_name || '';
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // 1. إرسال طلب الحذف إلى السيرفر
-        await fetch('https://my-dept-2.vercel.app/api/Delete', {
+        // 2. إرسال طلب الحذف للخادم في الخلفية
+        const response = await fetch('https://my-dept-2.vercel.app/api/Delete', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-user-id': userId,
+            'x-user-id': String(userId),
             'x-tenant-schema': companyName ? `schema_${companyName.toLowerCase().replace(/[^a-zA-Z0-9_]/g, '')}` : ''
           },
           body: JSON.stringify({
             action: 'DELETE',
-            id: debtIdToDelete,
+            id: rawId,
             personName: personName,
             person_name: personName,
             companyName: companyName,
@@ -140,17 +155,15 @@ export default function DebtList() {
           })
         });
 
-        // 2. تحديث الحصيلة المحلية مباشرة في الواجهة بدون طلب جلب من السيرفر
-        if (setDebts) {
-          setDebts(prevDebts => 
-            prevDebts.filter(item => {
-              const itemId = item.id || item._id || item.debt_id || item.debtId;
-              return itemId !== debtIdToDelete;
-            })
-          );
+        if (!response.ok) {
+          throw new Error('Failed to delete on server');
         }
       } catch (error) {
-        console.error('Error deleting debt:', error);
+        console.error('Error deleting debt on server:', error);
+        // إعادة البيانات في حال فشل الاتصال
+        if (setDebts) {
+          setDebts(previousDebts);
+        }
       } finally {
         setDeletingId(null);
       }
@@ -280,7 +293,8 @@ export default function DebtList() {
       {filteredDebts.length > 0 ? (
         <div className="px-4 space-y-3">
           {filteredDebts.map((debt, index) => {
-            const debtId = debt.id || debt._id || debt.debt_id || debt.debtId || index;
+            const rawDebtId = debt.id || debt._id || debt.debt_id || debt.debtId || index;
+            const debtId = String(rawDebtId);
             const isDeleting = deletingId === debtId;
 
             return (
