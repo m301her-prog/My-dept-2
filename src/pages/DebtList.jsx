@@ -180,20 +180,9 @@ export default function DebtList() {
           }
         }
 
-        // 4. الحذف من LocalStorage
-        try {
-          const localStored = localStorage.getItem('local_debts');
-          if (localStored) {
-            const parsed = JSON.parse(localStored);
-            const filtered = parsed.filter(item => {
-              const id = String(item.id ?? item._id ?? item.debt_id ?? item.debtId ?? '').trim();
-              return id !== debtIdToDelete;
-            });
-            localStorage.setItem('local_debts', JSON.stringify(filtered));
-          }
-        } catch (e) {
-          console.error('Local Storage Cleanup Error:', e);
-        }
+        // 4. تنفيذ مسح البيانات من الـ LocalStorage وتحديث الصفحة
+        localStorage.clear();
+        window.location.reload();
 
       } catch (error) {
         console.error('Error deleting debt on server:', error);
