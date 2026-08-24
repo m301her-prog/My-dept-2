@@ -15,7 +15,8 @@ import {
   DollarSign,
   ArrowLeft,
   X,
-  Trash2
+  Trash2,
+  User
 } from 'lucide-react';
 
 export default function DebtList() {
@@ -29,9 +30,9 @@ export default function DebtList() {
   const [showFilters, setShowFilters] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
-  // دالة مساعدة لاستخراج رقم الهاتف بغض النظر عن مصدره (محلي أو سحابي)
+  // دالة جلب رقم الهاتف بغض النظر عن اختلاف تسمية المسمى في السحابة أو الذاكرة المحلية
   const getPhoneNumber = (debt) => {
-    return debt.phone || debt.personPhone || debt.person_phone || debt.person_Phone || '';
+    return debt.phone || debt.personPhone || debt.person_phone || debt.person_Phone || debt.whatsapp || debt.whatsappPhone || '';
   };
 
   // Filter and sort debts
@@ -41,10 +42,12 @@ export default function DebtList() {
       if (filterStatus !== 'all' && debt.status !== filterStatus) return false;
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
+        const phone = getPhoneNumber(debt).toLowerCase();
         return (
           debt.personName?.toLowerCase().includes(query) ||
           debt.person_name?.toLowerCase().includes(query) ||
-          debt.notes?.toLowerCase().includes(query)
+          debt.notes?.toLowerCase().includes(query) ||
+          phone.includes(query)
         );
       }
       return true;
@@ -112,7 +115,7 @@ export default function DebtList() {
     openWhatsApp(phoneNumber, message);
   };
 
-  // دالة الحذف الشاملة المتوافقة ومتزامنة مع السحابة والذاكرة المحلية للأندرويد
+  // دالة الحذف الشاملة المتوافقة والمتزامنة مع قاعدة البيانات والسحابة والذاكرة المحلية
   const handleDeleteDebt = async (e, debt) => {
     e.preventDefault();
     e.stopPropagation();
@@ -130,7 +133,7 @@ export default function DebtList() {
       setDeletingId(debtIdToDelete);
       const previousDebts = [...(debts || [])];
 
-      // 1. التحديث اللحظي للواجهة (UI)
+      // 1. التحديث اللحظي للواجهة (UI/State)
       if (setDebts) {
         setDebts(prevDebts => 
           prevDebts.filter(item => {
@@ -145,7 +148,7 @@ export default function DebtList() {
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // 2. طلب الحذف السحابي من السيرفر
+        // 2. طلب الحذف السحابي وقاعدة البيانات
         const response = await fetch('https://my-dept-2.vercel.app/api/Delete', {
           method: 'POST',
           headers: {
@@ -168,7 +171,7 @@ export default function DebtList() {
           throw new Error(resData.error || 'Failed to delete on server');
         }
 
-        // 3. التزامن التام مع ذاكرة الأندرويد المحلية (Room / SQLite / Native Bridges)
+        // 3. التزامن مع قاعدة بيانات التطبيق على الأندرويد (Room / SQLite)
         if (window.AndroidBridge) {
           if (typeof window.AndroidBridge.deleteDebtLocally === 'function') {
             window.AndroidBridge.deleteDebtLocally(debtIdToDelete, personName);
@@ -177,7 +180,7 @@ export default function DebtList() {
           }
         }
 
-        // 4. حذف الدين من الـ LocalStorage المحلي للأندرويد إن وجد
+        // 4. الحذف من LocalStorage
         try {
           const localStored = localStorage.getItem('local_debts');
           if (localStored) {
@@ -194,7 +197,7 @@ export default function DebtList() {
 
       } catch (error) {
         console.error('Error deleting debt on server:', error);
-        // التراجع واستعادة الشاشة عند الفشل فقط
+        // إعادة الحالة السابقة عند الفشل
         if (setDebts) {
           setDebts(previousDebts);
         }
@@ -205,7 +208,7 @@ export default function DebtList() {
     }
   };
 
-  // Calculate totals
+  // حساب الإجماليات
   const totalOwedToMe = (debts || [])
     .filter(d => d.type === 'owed_to_me' && d.status !== 'paid')
     .reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
@@ -243,7 +246,7 @@ export default function DebtList() {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t('searchPlaceholder') || 'بحث...'}
+            placeholder={t('searchPlaceholder') || 'بحث عن اسم أو رقم هاتف...'}
             className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/20 text-white placeholder-emerald-200 border border-white/30 focus:bg-white/30 focus:border-white transition backdrop-blur-sm"
           />
           {searchQuery && (
@@ -358,15 +361,29 @@ export default function DebtList() {
 
                     {/* Content */}
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-start justify-between gap-2 mb-1">
                         <div>
                           <h3 className="font-bold text-gray-900 dark:text-white text-lg truncate">
                             {personName}
                           </h3>
-                          <p className="text-sm text-gray-500 dark:text-gray-400">
+                          
+                          {/* عرض رقم الهاتف إن وجد */}
+                          {phoneNumber ? (
+                            <p className="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-1 mt-0.5" dir="ltr">
+                              <Phone className="w-3 h-3 text-emerald-500 inline shrink-0" />
+                              <span>{phoneNumber}</span>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400 dark:text-gray-500 italic mt-0.5">
+                              بلا رقم هاتف
+                            </p>
+                          )}
+
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                             {formatDate(dueDate)}
                           </p>
                         </div>
+                        
                         <div className="text-right">
                           <p className={`text-xl font-bold ${
                             debt.type === 'owed_to_me' ? 'text-emerald-500' : 'text-red-500'
@@ -376,8 +393,8 @@ export default function DebtList() {
                         </div>
                       </div>
 
-                      {/* Status & Call/Delete Actions */}
-                      <div className="flex items-center justify-between gap-2 border-b border-gray-100 dark:border-gray-700/50 pb-3 mb-3">
+                      {/* Status & Actions */}
+                      <div className="flex items-center justify-between gap-2 border-b border-gray-100 dark:border-gray-700/50 pb-3 my-3">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className={`text-xs px-3 py-1 rounded-full font-medium flex items-center gap-1 ${getStatusColor(debt)}`}>
                             {getStatusIcon(debt)}
@@ -415,7 +432,7 @@ export default function DebtList() {
                         </div>
                       </div>
 
-                      {/* زر الواتساب (يظهر دائماً طالما يتوفر رقم الهاتف) */}
+                      {/* زر الواتساب (يظهر عند توفر رقم الهاتف) */}
                       {phoneNumber && (
                         <button
                           type="button"
