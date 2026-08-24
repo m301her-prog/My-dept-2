@@ -80,22 +80,26 @@ export default async function handler(request, response) {
         const debtsQuery = 'SELECT * FROM debts ORDER BY id DESC';
         const result = await client.query(debtsQuery);
 
-        // 6. تحويل مسميات الأعمدة إلى CamelCase للواجهة
-        const formattedDebts = result.rows.map(row => ({
-            id: row.id,
-            type: row.type,
-            personName: row.person_name,
-            phone: row.phone,
-            amount: parseFloat(row.amount) || 0,
-            currency: row.currency || 'DZD',
-            dueDate: row.due_date,
-            notes: row.notes,
-            status: row.status,
-            isScheduled: row.is_scheduled || false,
-            scheduleType: row.schedule_type,
-            installmentsCount: row.installments_count || 0,
-            firstPaymentDate: row.first_payment_date
-        }));
+        // 6. تحويل مسميات الأعمدة إلى CamelCase للواجهة مع ربط person_phone
+        const formattedDebts = result.rows.map(row => {
+            const extractedPhone = row.person_phone || row.phone || '';
+            return {
+                id: row.id,
+                type: row.type,
+                personName: row.person_name,
+                person_phone: extractedPhone,
+                phone: extractedPhone,
+                amount: parseFloat(row.amount) || 0,
+                currency: row.currency || 'DZD',
+                dueDate: row.due_date,
+                notes: row.notes,
+                status: row.status,
+                isScheduled: row.is_scheduled || false,
+                scheduleType: row.schedule_type,
+                installmentsCount: row.installments_count || 0,
+                firstPaymentDate: row.first_payment_date
+            };
+        });
 
         return response.status(200).json({
             success: true,
