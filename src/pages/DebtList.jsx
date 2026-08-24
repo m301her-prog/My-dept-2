@@ -30,9 +30,9 @@ export default function DebtList() {
   const [showFilters, setShowFilters] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
-  // دالة جلب رقم الهاتف بغض النظر عن اختلاف تسمية المسمى في السحابة أو الذاكرة المحلية
+  // دالة جلب رقم الهاتف مع التأكيد على حقل person_phone المتواجد في قاعدة البيانات
   const getPhoneNumber = (debt) => {
-    return debt.phone || debt.personPhone || debt.person_phone || debt.person_Phone || debt.whatsapp || debt.whatsappPhone || '';
+    return debt.person_phone || debt.personPhone || debt.phone || debt.person_Phone || debt.whatsapp || debt.whatsappPhone || '';
   };
 
   // Filter and sort debts
