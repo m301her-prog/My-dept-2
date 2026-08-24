@@ -112,15 +112,15 @@ export default function DebtList() {
     openWhatsApp(phoneNumber, message);
   };
 
-  // دالة الحذف الشاملة المتوافقة مع السحابة والذاكرة المحلية للأندرويد
+  // دالة الحذف الشاملة المتوافقة ومتزامنة مع السحابة والذاكرة المحلية للأندرويد
   const handleDeleteDebt = async (e, debt) => {
     e.preventDefault();
     e.stopPropagation();
 
-    const rawId = debt.id || debt._id || debt.debt_id || debt.debtId;
-    if (!rawId || deletingId) return;
+    const rawId = debt.id ?? debt._id ?? debt.debt_id ?? debt.debtId;
+    if (rawId === undefined || rawId === null || deletingId) return;
 
-    const debtIdToDelete = String(rawId);
+    const debtIdToDelete = String(rawId).trim();
     const nameDisplay = debt.personName || debt.person_name || 'هذا الدين';
     const confirmMessage = language === 'ar' 
       ? `هل أنت تأكد من رغبتك في حذف دين "${nameDisplay}"؟` 
@@ -128,13 +128,13 @@ export default function DebtList() {
       
     if (window.confirm(confirmMessage)) {
       setDeletingId(debtIdToDelete);
-      const previousDebts = debts;
+      const previousDebts = [...(debts || [])];
 
-      // 1. التحديث اللحظي للواجهة
+      // 1. التحديث اللحظي للواجهة (UI)
       if (setDebts) {
         setDebts(prevDebts => 
           prevDebts.filter(item => {
-            const itemId = String(item.id || item._id || item.debt_id || item.debtId || '');
+            const itemId = String(item.id ?? item._id ?? item.debt_id ?? item.debtId ?? '').trim();
             return itemId !== debtIdToDelete;
           })
         );
@@ -145,7 +145,7 @@ export default function DebtList() {
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // 2. طلب الحذف السحابي
+        // 2. طلب الحذف السحابي من السيرفر
         const response = await fetch('https://my-dept-2.vercel.app/api/Delete', {
           method: 'POST',
           headers: {
@@ -164,22 +164,41 @@ export default function DebtList() {
 
         const resData = await response.json();
 
-        if (!response.ok || !resData.success) {
+        if (!response.ok || (resData.success !== undefined && !resData.success)) {
           throw new Error(resData.error || 'Failed to delete on server');
         }
 
-        // 3. التفاعل مع بيئة Android Native (إن وُجدت) للحذف الداخلي وإطلاق الإشعار
-        if (window.AndroidBridge && window.AndroidBridge.deleteDebtLocally) {
-          window.AndroidBridge.deleteDebtLocally(debtIdToDelete, personName);
+        // 3. التزامن التام مع ذاكرة الأندرويد المحلية (Room / SQLite / Native Bridges)
+        if (window.AndroidBridge) {
+          if (typeof window.AndroidBridge.deleteDebtLocally === 'function') {
+            window.AndroidBridge.deleteDebtLocally(debtIdToDelete, personName);
+          } else if (typeof window.AndroidBridge.deleteDebtFromLocalDb === 'function') {
+            window.AndroidBridge.deleteDebtFromLocalDb(debtIdToDelete, personName);
+          }
+        }
+
+        // 4. حذف الدين من الـ LocalStorage المحلي للأندرويد إن وجد
+        try {
+          const localStored = localStorage.getItem('local_debts');
+          if (localStored) {
+            const parsed = JSON.parse(localStored);
+            const filtered = parsed.filter(item => {
+              const id = String(item.id ?? item._id ?? item.debt_id ?? item.debtId ?? '').trim();
+              return id !== debtIdToDelete;
+            });
+            localStorage.setItem('local_debts', JSON.stringify(filtered));
+          }
+        } catch (e) {
+          console.error('Local Storage Cleanup Error:', e);
         }
 
       } catch (error) {
         console.error('Error deleting debt on server:', error);
-        // التراجع في حالة الخطأ
+        // التراجع واستعادة الشاشة عند الفشل فقط
         if (setDebts) {
           setDebts(previousDebts);
         }
-        alert(language === 'ar' ? 'حدث خطأ أثناء الحذف من السحابة' : 'Failed to delete from cloud');
+        alert(language === 'ar' ? 'حدث خطأ أثناء الحذف، يرجى الاتصال بالإنترنت' : 'Failed to delete debt');
       } finally {
         setDeletingId(null);
       }
@@ -309,7 +328,7 @@ export default function DebtList() {
       {filteredDebts.length > 0 ? (
         <div className="px-4 space-y-3">
           {filteredDebts.map((debt, index) => {
-            const rawDebtId = debt.id || debt._id || debt.debt_id || debt.debtId || index;
+            const rawDebtId = debt.id ?? debt._id ?? debt.debt_id ?? debt.debtId ?? index;
             const debtId = String(rawDebtId);
             const isDeleting = deletingId === debtId;
             const phoneNumber = getPhoneNumber(debt);
