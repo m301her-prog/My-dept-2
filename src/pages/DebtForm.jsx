@@ -143,7 +143,7 @@ export default function DebtForm() {
         scheduleData: existingDebt.scheduleData || null
       });
       setShowScheduleCard(existingDebt.isScheduled || existingDebt.is_scheduled || false);
-      
+
       if (existingDebt.paymentsList || existingDebt.payments_list) {
         setPaymentsList(existingDebt.paymentsList || existingDebt.payments_list);
       }
@@ -189,7 +189,7 @@ export default function DebtForm() {
     };
 
     setPaymentsList(prev => [paymentItem, ...prev]);
-    
+
     const totalAmount = parseFloat(formData.amount) || 0;
     const paidAmount = [paymentItem, ...paymentsList]
       .filter(p => p.type === 'settle')
@@ -199,13 +199,13 @@ export default function DebtForm() {
     if (newPayment.type === 'record') {
       const msgAr = `تم تسجيل إضافة دفعة بمبلغ ${amt} ${formData.currency}. المتبقي الإجمالي: ${remainingAmount} ${formData.currency}. تاريخ الاستحقاق القادم: ${formData.dueDate}`;
       const msgEn = `Payment installment of ${amt} ${formData.currency} added. Total remaining: ${remainingAmount} ${formData.currency}. Next due: ${formData.dueDate}`;
-      
+
       showNotification(language === 'ar' ? `تم تسجيل إضافة دفعة بمبلغ ${amt} ${formData.currency} بنجاح` : `Payment installment of ${amt} ${formData.currency} added successfully`, 'success');
       sendAndroidNotification(language === 'ar' ? 'تحديث مواعيد الدفعات' : 'Installments Schedule Update', language === 'ar' ? msgAr : msgEn);
     } else {
       const msgAr = `تم تسديد دفعة بمبلغ ${amt} ${formData.currency}. المتبقي للسداد: ${remainingAmount} ${formData.currency}. يرجى الالتزام بموعد السداد النهائي في ${formData.dueDate}`;
       const msgEn = `Settle payment of ${amt} ${formData.currency} recorded. Remaining: ${remainingAmount} ${formData.currency}. Final due date: ${formData.dueDate}`;
-      
+
       showNotification(language === 'ar' ? `تم تسديد دفعة بمبلغ ${amt} ${formData.currency} بنجاح` : `Settle payment of ${amt} ${formData.currency} recorded successfully`, 'success');
       sendAndroidNotification(language === 'ar' ? 'إشعار سداد دفعة ومواعيد الاستحقاق' : 'Payment Settlement & Due Dates', language === 'ar' ? msgAr : msgEn);
     }
@@ -247,16 +247,16 @@ export default function DebtForm() {
         await updateDebt(id, debtData);
       } else {
         await addDebt(debtData);
-        
-        const debtTypeString = formData.type === 'owed_to_me' 
-          ? (language === 'ar' ? 'مستحق لك من' : 'owed to you by') 
+
+        const debtTypeString = formData.type === 'owed_to_me'
+          ? (language === 'ar' ? 'مستحق لك من' : 'owed to you by')
           : (language === 'ar' ? 'متوجب عليك لصالح' : 'you owe to');
-        
+
         const notifTitle = language === 'ar' ? 'تم إضافة دين جديد بنجاح' : 'New Debt Registered';
-        const notifMessage = language === 'ar' 
+        const notifMessage = language === 'ar'
           ? `تم تسجيل دين جديد بمبلغ ${formData.amount} ${formData.currency} ${debtTypeString} ${formData.personName}. تاريخ الاستحقاق: ${formData.dueDate}`
           : `New debt of ${formData.amount} ${formData.currency} ${debtTypeString} ${formData.personName} has been created. Due date: ${formData.dueDate}`;
-        
+
         sendAndroidNotification(notifTitle, notifMessage);
       }
 
@@ -297,8 +297,8 @@ export default function DebtForm() {
       dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
     }));
     showNotification(
-      language === 'ar' 
-        ? `جاهز لإضافة دين جديد للعميل: ${formData.personName}` 
+      language === 'ar'
+        ? `جاهز لإضافة دين جديد للعميل: ${formData.personName}`
         : `Ready to add new debt for: ${formData.personName}`,
       'info'
     );
@@ -450,22 +450,22 @@ export default function DebtForm() {
         </div>
 
         {/* Amount & Currency */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-lg">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-lg overflow-hidden">
           <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
             <DollarSign className="w-4 h-4" />
             {t('amount')}
             <span className="text-red-500">*</span>
           </label>
-          <div className="flex gap-3">
+          <div className="flex items-center gap-2 w-full">
             <input
               type="number"
               value={formData.amount}
               onChange={(e) => handleChange('amount', e.target.value)}
-              className={`flex-1 px-4 py-3.5 rounded-xl border-2 ${
+              className={`flex-1 min-w-[120px] px-3.5 py-3 rounded-xl border-2 ${
                 errors.amount
                   ? 'border-red-500 bg-red-50 dark:bg-red-900/20'
                   : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700'
-              } text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition placeholder-gray-400`}
+              } text-gray-900 dark:text-white text-base font-semibold focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition placeholder-gray-400`}
               placeholder="0"
               min="0"
               step="0.01"
@@ -474,11 +474,11 @@ export default function DebtForm() {
             <select
               value={formData.currency}
               onChange={(e) => handleChange('currency', e.target.value)}
-              className="px-4 py-3.5 rounded-xl border-2 border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition font-medium"
+              className="w-32 shrink-0 px-2 py-3 rounded-xl border-2 border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition text-sm font-bold truncate"
             >
               {allCurrencies.map(c => (
                 <option key={c.code} value={c.code}>
-                  {c.name}
+                  {c.code} - {c.name}
                 </option>
               ))}
             </select>
@@ -683,7 +683,7 @@ export default function DebtForm() {
                       }`}
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      {language === 'ar' ? 'تسديد دفعة متأخرة' : 'Settle Payment'}
+                      {language === 'ar' ? 'تسديد دفعة' : 'Settle Payment'}
                     </button>
                   </div>
 
@@ -692,30 +692,31 @@ export default function DebtForm() {
                       type="number"
                       value={newPayment.amount}
                       onChange={(e) => setNewPayment(prev => ({ ...prev, amount: e.target.value }))}
-                      placeholder={language === 'ar' ? 'مبلغ الدفعة...' : 'Payment amount...'}
-                      className="flex-1 px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                      placeholder={language === 'ar' ? 'مبلغ الدفعة' : 'Payment amount'}
+                      className="flex-1 px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs"
                       min="0"
                       step="0.01"
                     />
                     <button
                       type="button"
                       onClick={handleAddPaymentAction}
-                      className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl transition shadow-sm active:scale-95"
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition"
                     >
-                      {language === 'ar' ? 'حفظ الدفعة' : 'Save'}
+                      {language === 'ar' ? 'تأكيد' : 'Confirm'}
                     </button>
                   </div>
 
+                  {/* قائمة الدفعات المسجلة */}
                   {paymentsList.length > 0 && (
-                    <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 mt-2">
-                      {paymentsList.map(item => (
-                        <div key={item.id} className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50 flex items-center justify-between text-[11px]">
+                    <div className="mt-3 space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                      {paymentsList.map((p) => (
+                        <div key={p.id} className="flex items-center justify-between p-2 bg-white dark:bg-gray-700/60 rounded-lg text-xs border border-gray-100 dark:border-gray-600">
                           <div className="flex items-center gap-2">
-                            <span className={`w-1.5 h-1.5 rounded-full ${item.type === 'settle' ? 'bg-blue-500' : 'bg-emerald-500'}`}></span>
-                            <span className="font-bold text-gray-800 dark:text-gray-200">{item.amount} {formData.currency}</span>
-                            <span className="text-gray-400">({item.type === 'settle' ? (language === 'ar' ? 'تسديد' : 'Settle') : (language === 'ar' ? 'دفعة' : 'Record')})</span>
+                            <span className={`w-2 h-2 rounded-full ${p.type === 'settle' ? 'bg-blue-500' : 'bg-emerald-500'}`}></span>
+                            <span className="font-bold text-gray-800 dark:text-gray-200">{p.amount} {formData.currency}</span>
+                            <span className="text-[10px] text-gray-400">({p.type === 'settle' ? (language === 'ar' ? 'تسديد' : 'Settle') : (language === 'ar' ? 'إضافة' : 'Record')})</span>
                           </div>
-                          <span className="text-gray-400">{item.date}</span>
+                          <span className="text-[10px] text-gray-400">{p.date}</span>
                         </div>
                       ))}
                     </div>
@@ -726,57 +727,44 @@ export default function DebtForm() {
           )}
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex gap-3 pt-4">
-          <button
-            type="button"
-            onClick={() => navigate(-1)}
-            className="flex-1 py-4 px-6 rounded-2xl border-2 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-bold hover:bg-gray-100 dark:hover:bg-gray-800 transition"
-          >
-            {t('cancel')}
-          </button>
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex-1 py-4 px-6 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold rounded-2xl shadow-lg hover:shadow-xl transition flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            <Save className="w-5 h-5" />
-            <span>{isEditing ? t('update') : t('save')}</span>
-          </button>
-        </div>
+        {/* Submit Button */}
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2 transition disabled:opacity-50"
+        >
+          <Save className="w-5 h-5" />
+          <span>{loading ? t('saving') : (isEditing ? t('updateDebt') : t('saveDebt'))}</span>
+        </button>
       </form>
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
-            <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 text-red-500 flex items-center justify-center mx-auto">
+          <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 max-w-sm w-full space-y-4 text-center shadow-2xl">
+            <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 text-red-500 rounded-2xl flex items-center justify-center mx-auto">
               <AlertCircle className="w-6 h-6" />
             </div>
-            <div className="text-center space-y-2">
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-                {t('confirmDelete')}
-              </h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                {language === 'ar'
-                  ? 'هل أنت تأكد من إمكانية حذف هذا الدين نهائياً؟ لن تفي الأثر بكافة الحسابات'
-                  : 'Are you sure you want to delete this debt?'}
-              </p>
-            </div>
-            <div className="flex gap-3 pt-2">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+              {language === 'ar' ? 'حذف الدين' : 'Delete Debt'}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {language === 'ar' ? 'هل أنت تأكد من رغبتك في حذف هذا الدين؟ لا يمكن التراجع عن هذا الإجراء.' : 'Are you sure you want to delete this debt? This action cannot be undone.'}
+            </p>
+            <div className="grid grid-cols-2 gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => setShowDeleteConfirm(false)}
-                className="flex-1 py-3 px-4 rounded-xl border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-bold hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                className="py-3 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-bold rounded-xl hover:bg-gray-200 transition text-sm"
               >
-                {t('cancel')}
+                {language === 'ar' ? 'إلغاء' : 'Cancel'}
               </button>
               <button
                 type="button"
                 onClick={handleDelete}
-                className="flex-1 py-3 px-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl shadow-lg transition"
+                className="py-3 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition text-sm shadow-md shadow-red-500/20"
               >
-                {t('delete')}
+                {language === 'ar' ? 'تأكيد الحذف' : 'Delete'}
               </button>
             </div>
           </div>
