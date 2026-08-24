@@ -54,7 +54,7 @@ export default async function handler(req, res) {
 
         // 1. استخراج المعرفات المباشرة مع آمان الطول
         const rawId = body.id || body.debtId || d.id || d._id || null;
-        const targetId = safeTruncate(rawId, 50); // تقليم الـ ID لتجنب تجاوز 50 حرفاً
+        const targetId = safeTruncate(rawId, 50);
         const personName = safeTruncate(body.personName || body.person_name || d.personName || d.person_name, 50);
 
         // 2. تحديد وتوحيد السكيمّا المستهدفة
@@ -131,11 +131,14 @@ export default async function handler(req, res) {
                     }
 
                     if (result.rowCount > 0) {
+                        const deletedItem = result.rows[0];
                         return res.status(200).json({
                             success: true,
                             message: 'تم الحذف بنجاح عبر الفحص الشامل',
+                            deleteLocal: true, // إشارة صريحة للـ Android بالحذف الداخلي
+                            deletedDebtId: deletedItem.id,
                             schemaUsed: sysSchema,
-                            deletedDebt: result.rows[0]
+                            deletedDebt: deletedItem
                         });
                     }
                 }
@@ -144,15 +147,21 @@ export default async function handler(req, res) {
             if (result.rowCount === 0) {
                 return res.status(404).json({
                     success: false,
+                    deleteLocal: false,
                     error: 'لم يتم العثور على أي سجل مطابق لهذه البيانات لحذفه'
                 });
             }
 
+            const deletedItem = result.rows[0];
+
+            // الرد بملف النجاح متضمناً توجيهات الأندرويد
             return res.status(200).json({
                 success: true,
-                message: 'تم الحذف بنجاح',
+                message: 'تم الحذف بنجاح من السحابة',
+                deleteLocal: true, // إشارة صريحة للـ Android بالحذف الداخلي
+                deletedDebtId: deletedItem.id,
                 schemaUsed: cleanSchema,
-                deletedDebt: result.rows[0]
+                deletedDebt: deletedItem
             });
         }
 
@@ -169,7 +178,7 @@ export default async function handler(req, res) {
         const personPhone = safeTruncate(d.personPhone || d.person_phone || d.phone, 30);
         const dueDate = d.dueDate || d.due_date || null;
         const status = safeTruncate(d.status || 'pending', 20);
-        const notes = d.notes ? d.notes.toString() : null; // الملاحظات تبقى طويلة طالما نوعها TEXT
+        const notes = d.notes ? d.notes.toString() : null;
         const createdAt = d.createdAt || d.created_at || new Date().toISOString();
 
         const saveQuery = `
