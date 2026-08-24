@@ -478,7 +478,7 @@ export default function DebtForm() {
             >
               {allCurrencies.map(c => (
                 <option key={c.code} value={c.code}>
-                  {language === 'ar' ? c.name : c.code}
+                  {c.name}
                 </option>
               ))}
             </select>
@@ -683,48 +683,39 @@ export default function DebtForm() {
                       }`}
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      {language === 'ar' ? 'تسديد دفعة الآن' : 'Settle Installment'}
+                      {language === 'ar' ? 'تسديد دفعة متأخرة' : 'Settle Payment'}
                     </button>
                   </div>
 
                   <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <input
-                        type="number"
-                        value={newPayment.amount}
-                        onChange={(e) => setNewPayment(prev => ({ ...prev, amount: e.target.value }))}
-                        placeholder={language === 'ar' ? 'أدخل قيمة الدفعة...' : 'Amount...'}
-                        className="w-full pl-3 pr-4 py-2.5 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl border border-gray-200 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
-                      />
-                    </div>
+                    <input
+                      type="number"
+                      value={newPayment.amount}
+                      onChange={(e) => setNewPayment(prev => ({ ...prev, amount: e.target.value }))}
+                      placeholder={language === 'ar' ? 'مبلغ الدفعة...' : 'Payment amount...'}
+                      className="flex-1 px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                      min="0"
+                      step="0.01"
+                    />
                     <button
                       type="button"
                       onClick={handleAddPaymentAction}
-                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs transition shadow-sm active:scale-95 flex items-center gap-1"
+                      className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl transition shadow-sm active:scale-95"
                     >
-                      <Plus className="w-4 h-4" />
-                      {language === 'ar' ? 'تأكيد' : 'Confirm'}
+                      {language === 'ar' ? 'حفظ الدفعة' : 'Save'}
                     </button>
                   </div>
 
-                  {/* قائمة الدفعات المسجلة */}
                   {paymentsList.length > 0 && (
-                    <div className="mt-3 space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                      {paymentsList.map((p) => (
-                        <div
-                          key={p.id}
-                          className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 text-xs shadow-sm"
-                        >
+                    <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 mt-2">
+                      {paymentsList.map(item => (
+                        <div key={item.id} className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50 flex items-center justify-between text-[11px]">
                           <div className="flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full ${p.type === 'settle' ? 'bg-blue-500' : 'bg-emerald-500'}`}></span>
-                            <span className="font-bold text-gray-800 dark:text-gray-200">
-                              {p.amount} {formData.currency}
-                            </span>
-                            <span className="text-[10px] text-gray-400">
-                              ({p.type === 'settle' ? (language === 'ar' ? 'تسديد' : 'Settle') : (language === 'ar' ? 'إضافة' : 'Record')})
-                            </span>
+                            <span className={`w-1.5 h-1.5 rounded-full ${item.type === 'settle' ? 'bg-blue-500' : 'bg-emerald-500'}`}></span>
+                            <span className="font-bold text-gray-800 dark:text-gray-200">{item.amount} {formData.currency}</span>
+                            <span className="text-gray-400">({item.type === 'settle' ? (language === 'ar' ? 'تسديد' : 'Settle') : (language === 'ar' ? 'دفعة' : 'Record')})</span>
                           </div>
-                          <span className="text-[10px] text-gray-400">{p.date}</span>
+                          <span className="text-gray-400">{item.date}</span>
                         </div>
                       ))}
                     </div>
@@ -735,42 +726,55 @@ export default function DebtForm() {
           )}
         </div>
 
-        {/* Submit Button */}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg transition active:scale-98 disabled:opacity-50"
-        >
-          <Save className="w-5 h-5" />
-          {loading ? t('saving') : isEditing ? t('updateDebt') : t('saveDebt')}
-        </button>
+        {/* Action Buttons */}
+        <div className="flex gap-3 pt-4">
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="flex-1 py-4 px-6 rounded-2xl border-2 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-bold hover:bg-gray-100 dark:hover:bg-gray-800 transition"
+          >
+            {t('cancel')}
+          </button>
+          <button
+            type="submit"
+            disabled={loading}
+            className="flex-1 py-4 px-6 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold rounded-2xl shadow-lg hover:shadow-xl transition flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            <Save className="w-5 h-5" />
+            <span>{isEditing ? t('update') : t('save')}</span>
+          </button>
+        </div>
       </form>
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 max-w-sm w-full space-y-4 text-center shadow-2xl">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl">
             <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 text-red-500 flex items-center justify-center mx-auto">
               <AlertCircle className="w-6 h-6" />
             </div>
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-              {t('confirmDelete')}
-            </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              {t('deleteDebtWarning')}
-            </p>
+            <div className="text-center space-y-2">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+                {t('confirmDelete')}
+              </h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {language === 'ar'
+                  ? 'هل أنت تأكد من إمكانية حذف هذا الدين نهائياً؟ لن تفي الأثر بكافة الحسابات'
+                  : 'Are you sure you want to delete this debt?'}
+              </p>
+            </div>
             <div className="flex gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => setShowDeleteConfirm(false)}
-                className="flex-1 py-3 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-bold hover:bg-gray-200 transition"
+                className="flex-1 py-3 px-4 rounded-xl border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 font-bold hover:bg-gray-50 dark:hover:bg-gray-700 transition"
               >
                 {t('cancel')}
               </button>
               <button
                 type="button"
                 onClick={handleDelete}
-                className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition shadow-lg shadow-red-500/30"
+                className="flex-1 py-3 px-4 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl shadow-lg transition"
               >
                 {t('delete')}
               </button>
