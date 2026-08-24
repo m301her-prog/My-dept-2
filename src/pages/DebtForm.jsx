@@ -220,6 +220,36 @@ export default function DebtForm() {
     if (!validate()) return;
 
     try {
+      const count = showScheduleCard ? parseInt(formData.installmentsCount) || 0 : 0;
+      let generatedScheduleItems = [];
+
+      // توليد جدول الدفعات والتواريخ عند تفعيل الجدولة
+      if (showScheduleCard && count > 0) {
+        const totalAmt = parseFloat(formData.amount);
+        const installmentAmt = Number((totalAmt / count).toFixed(2));
+        const startDate = new Date(formData.firstPaymentDate || formData.dueDate);
+
+        for (let i = 0; i < count; i++) {
+          const itemDate = new Date(startDate);
+
+          if (formData.scheduleType === 'daily') {
+            itemDate.setDate(startDate.getDate() + i);
+          } else if (formData.scheduleType === 'weekly') {
+            itemDate.setDate(startDate.getDate() + (i * 7));
+          } else if (formData.scheduleType === 'monthly') {
+            itemDate.setMonth(startDate.getMonth() + i);
+          }
+
+          generatedScheduleItems.push({
+            id: generateUniqueId(),
+            installmentNumber: i + 1,
+            amount: i === count - 1 ? Number((totalAmt - (installmentAmt * (count - 1))).toFixed(2)) : installmentAmt,
+            dueDate: itemDate.toISOString().split('T')[0],
+            status: 'pending'
+          });
+        }
+      }
+
       const debtData = {
         id: id || generateUniqueId(),
         type: formData.type,
@@ -236,10 +266,12 @@ export default function DebtForm() {
         is_scheduled: showScheduleCard,
         scheduleType: showScheduleCard ? formData.scheduleType : null,
         schedule_type: showScheduleCard ? formData.scheduleType : null,
-        installmentsCount: showScheduleCard ? parseInt(formData.installmentsCount) || 0 : 0,
-        installments_count: showScheduleCard ? parseInt(formData.installmentsCount) || 0 : 0,
+        installmentsCount: count,
+        installments_count: count,
         firstPaymentDate: showScheduleCard ? formData.firstPaymentDate : null,
         first_payment_date: showScheduleCard ? formData.firstPaymentDate : null,
+        scheduleData: showScheduleCard ? generatedScheduleItems : null,
+        schedule_data: showScheduleCard ? generatedScheduleItems : null,
         paymentsList: paymentsList
       };
 
