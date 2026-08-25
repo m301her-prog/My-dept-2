@@ -79,6 +79,18 @@ export default async function handler(req, res) {
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
 
+        // التأكد من إضافة الأعمدة في حال لم تكن موجودة لمنع خطأ Column Does Not Exist
+        await client.query(`
+            ALTER TABLE debts 
+            ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'DZD',
+            ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS schedule_type TEXT,
+            ADD COLUMN IF NOT EXISTS installments_count INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS first_payment_date TEXT,
+            ADD COLUMN IF NOT EXISTS schedule_data JSONB,
+            ADD COLUMN IF NOT EXISTS payments_list JSONB;
+        `);
+
         let query = '';
         let params = [];
 
