@@ -15,6 +15,7 @@ import {
   DollarSign,
   ArrowLeft,
   X,
+  Trash,
   Trash2,
   Calendar,
   ChevronDown,
@@ -32,6 +33,22 @@ export default function DebtList() {
   const [showFilters, setShowFilters] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [expandedScheduleId, setExpandedScheduleId] = useState(null);
+
+  // دالة حذف سجل الديون المحددة من LocalStorage والـ State
+  const handleClearSpecificData = (keysToDelete = ['debts', 'pending_offline_debts']) => {
+    const confirmMessage = t('confirmDelete') || 
+      (language === 'ar' ? 'هل أنت تأكد من رغبتك في حذف سجل الديون بالكامل؟' : 'Are you sure you want to delete all debts history?');
+
+    if (window.confirm(confirmMessage)) {
+      try {
+        keysToDelete.forEach(key => localStorage.removeItem(key));
+        if (setDebts) setDebts([]);
+        window.location.reload();
+      } catch (error) {
+        console.error('Error clearing specific data:', error);
+      }
+    }
+  };
 
   // دالة جلب رقم الهاتف مع التأكيد على حقل person_phone المتواجد في قاعدة البيانات
   const getPhoneNumber = (debt) => {
@@ -306,7 +323,7 @@ export default function DebtList() {
 
       {/* Summary Cards */}
       <div className="px-4 -mt-2 mb-4">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3 mb-3">
           <div className="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-lg border-l-4 border-emerald-500">
             <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">{t('owedToMe') || 'له علي (لك)'}</p>
             <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-1">
@@ -320,6 +337,16 @@ export default function DebtList() {
             </p>
           </div>
         </div>
+
+        {/* زرار مسح سجل الديون فقط */}
+        <button
+          type="button"
+          onClick={() => handleClearSpecificData(['debts', 'pending_offline_debts'])}
+          className="w-full py-4 rounded-2xl border-2 border-red-500 text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 transition flex items-center justify-center gap-3"
+        >
+          <Trash className="w-5 h-5" />
+          {language === 'ar' ? 'مسح سجل الديون فقط' : 'Clear Debts History Only'}
+        </button>
       </div>
 
       {/* Results Count */}
