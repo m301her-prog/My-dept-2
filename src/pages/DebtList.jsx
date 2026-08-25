@@ -260,12 +260,14 @@ export default function DebtList() {
     }
   };
 
-  // دالة مساعدة لاستخراج قوام الأقساط
+  // دالة مساعدة محصنة لاستخراج بيانات الأقساط بغض النظر عن طريقة تحويل البيانات
   const parseScheduleData = (scheduleData) => {
     if (!scheduleData) return [];
     if (Array.isArray(scheduleData)) return scheduleData;
+    if (typeof scheduleData === 'object') return Object.values(scheduleData);
     try {
-      return JSON.parse(scheduleData);
+      const parsed = JSON.parse(scheduleData);
+      return Array.isArray(parsed) ? parsed : [];
     } catch (e) {
       return [];
     }
@@ -412,8 +414,9 @@ export default function DebtList() {
             const personName = debt.personName || debt.person_name || '';
             const dueDate = debt.dueDate || debt.due_date;
 
-            const isScheduled = debt.isScheduled || debt.is_scheduled;
             const scheduleItems = parseScheduleData(debt.scheduleData || debt.schedule_data);
+            const rawIsScheduled = debt.isScheduled ?? debt.is_scheduled;
+            const isScheduled = rawIsScheduled === true || rawIsScheduled === 'true' || rawIsScheduled === 1 || rawIsScheduled === '1' || scheduleItems.length > 0;
             const installmentsCount = debt.installmentsCount || debt.installments_count || scheduleItems.length;
             const isExpanded = expandedScheduleId === debtId;
 
