@@ -180,10 +180,6 @@ export default function DebtList() {
           }
         }
 
-        // 4. تنفيذ مسح البيانات من الـ LocalStorage وتحديث الصفحة
-        localStorage.clear();
-        window.location.reload();
-
       } catch (error) {
         console.error('Error deleting debt on server:', error);
         // إعادة الحالة السابقة عند الفشل
