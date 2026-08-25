@@ -50,6 +50,7 @@ export default function Home() {
   // State للتحكم في نافذة إضافة قسط
   const [selectedDebt, setSelectedDebt] = useState(null);
   const [installmentAmount, setInstallmentAmount] = useState('');
+  const [customInstallmentCount, setCustomInstallmentCount] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // State للتحكم في نافذة إضافة دين جديد (زيادة على المبلغ الحالي)
@@ -70,7 +71,8 @@ export default function Home() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-tenant-schema': item.tenantSchema || reqHeaderSchema || ''
+            'x-tenant-schema': item.tenantSchema || reqHeaderSchema || '',
+            'x-installment-count': item.installmentsCount ? String(item.installmentsCount) : ''
           },
           body: JSON.stringify(item)
         });
@@ -268,6 +270,9 @@ export default function Home() {
             <div style="font-size: 15px;">
               <span style="color: #555;">الحالة الحالية: </span><strong style="color: ${debt.status === 'paid' ? '#16a34a' : '#d97706'};">${debt.status === 'paid' ? 'تم السداد بالكامل' : 'متبقي'}</strong>
             </div>
+            <div style="font-size: 15px; grid-column: span 2;">
+              <span style="color: #555;">عدد الأقساط المتبقية: </span><strong style="color: #059669;">${debt.installmentsCount !== undefined ? debt.installmentsCount : '-'}</strong>
+            </div>
           </div>
 
           <div style="margin-bottom: 20px; background: #e6f4ea; padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #a7f3d0;">
@@ -325,15 +330,40 @@ export default function Home() {
     const newAmount = Math.max(0, selectedDebt.amount - amountPaid);
     const updatedStatus = newAmount === 0 ? 'paid' : selectedDebt.status;
 
+    // حساب خصم قسط واحد من عدد الدفعات المتبقية
+    const currentInstallmentsCount = customInstallmentCount !== '' 
+      ? parseInt(customInstallmentCount, 10) 
+      : (selectedDebt.installmentsCount !== undefined ? selectedDebt.installmentsCount : 0);
+      
+    const newInstallmentsCount = Math.max(0, currentInstallmentsCount - 1);
+
     const newHistoryItem = {
       id: Date.now(),
       type: 'installment',
       amount: amountPaid,
       date: new Date().toISOString(),
-      note: 'تسديد قسط'
+      note: `تسديد قسط (المتبقي: ${newInstallmentsCount} قسط)`
     };
 
     const updatedHistory = [...(selectedDebt.history || []), newHistoryItem];
+
+    // إرسال هيدر لفتح/تحديث عدد الأقساط الخاصة بالدين عبر الـ API إذا وُجدت المزامنة
+    try {
+      await fetch('/api/your-backend-endpoint', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-installment-count': String(newInstallmentsCount)
+        },
+        body: JSON.stringify({
+          debtId: selectedDebt.id,
+          installmentPaid: amountPaid,
+          remainingInstallments: newInstallmentsCount
+        })
+      });
+    } catch (e) {
+      // التعامل مع حالة الأوفلاين
+    }
 
     // تحديث الحالة في AppContext / Database
     if (updateDebt) {
@@ -341,6 +371,7 @@ export default function Home() {
         ...selectedDebt,
         amount: newAmount,
         status: updatedStatus,
+        installmentsCount: newInstallmentsCount,
         history: updatedHistory
       });
     }
@@ -383,6 +414,9 @@ export default function Home() {
               <span>المبلغ المتبقي الكلي: </span><strong style="color: #dc2626;">${formatCurrency(newAmount, selectedDebt.currency)}</strong>
             </div>
             <div style="font-size: 15px;">
+              <span>عدد الأقساط المتبقية: </span><strong style="color: #2563eb;">${newInstallmentsCount}</strong>
+            </div>
+            <div style="font-size: 15px; grid-column: span 2;">
               <span>حالة الدين: </span><strong>${updatedStatus === 'paid' ? 'مكتمل السداد' : 'قيد السداد'}</strong>
             </div>
           </div>
@@ -425,6 +459,7 @@ export default function Home() {
     // إعادة ضبط الحالة وإغلاق Modal
     setIsModalOpen(false);
     setInstallmentAmount('');
+    setCustomInstallmentCount('');
     setSelectedDebt(null);
   };
 
@@ -598,6 +633,7 @@ export default function Home() {
                   <tr>
                     <th className="p-3">الاسم</th>
                     <th className="p-3">المبلغ</th>
+                    <th className="p-3">الأقساط</th>
                     <th className="p-3">الحالة</th>
                     <th className="p-3">إجراءات (مشاركة PDF / أقساط / إضافة)</th>
                   </tr>
@@ -608,6 +644,9 @@ export default function Home() {
                       <td className="p-3 font-semibold">{debt.personName}</td>
                       <td className={`p-3 font-bold ${debt.type === 'owed_to_me' ? 'text-emerald-500' : 'text-red-500'}`}>
                         {formatCurrency(debt.amount, debt.currency)}
+                      </td>
+                      <td className="p-3 font-semibold text-blue-600 dark:text-blue-400">
+                        {debt.installmentsCount !== undefined ? debt.installmentsCount : '-'}
                       </td>
                       <td className="p-3">
                         <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(debt)}`}>
@@ -630,6 +669,7 @@ export default function Home() {
                         <button
                           onClick={() => {
                             setSelectedDebt(debt);
+                            setCustomInstallmentCount(debt.installmentsCount !== undefined ? String(debt.installmentsCount) : '');
                             setIsModalOpen(true);
                           }}
                           title="إضافة قسط واستخراج شيك سداد"
@@ -679,9 +719,22 @@ export default function Home() {
               العميل: <span className="font-semibold text-gray-800 dark:text-gray-200">{selectedDebt.personName}</span>
               <br />
               إجمالي الدين الحالي: <span className="font-bold text-emerald-600">{formatCurrency(selectedDebt.amount, selectedDebt.currency)}</span>
+              <br />
+              عدد الأقساط الحالية: <span className="font-bold text-blue-600">{selectedDebt.installmentsCount !== undefined ? selectedDebt.installmentsCount : '-'}</span>
             </p>
 
             <div className="mb-4">
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                تعديل/فتح إجمالي عدد الأقساط (Header: x-installment-count):
+              </label>
+              <input
+                type="number"
+                value={customInstallmentCount}
+                onChange={(e) => setCustomInstallmentCount(e.target.value)}
+                placeholder="أدخل عدد الأقساط الكلي..."
+                className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
+              />
+
               <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
                 مبلغ القسط المراد خصمه:
               </label>
@@ -730,13 +783,13 @@ export default function Home() {
 
             <div className="mb-4">
               <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                مبلغ الدين الإضافي:
+                المبلغ المراد إضافته للدين:
               </label>
               <input
                 type="number"
                 value={additionalDebtAmount}
                 onChange={(e) => setAdditionalDebtAmount(e.target.value)}
-                placeholder="أدخل مبلغ الدين الجديد..."
+                placeholder="أدخل المبلغ الإضافي..."
                 className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
               />
             </div>
@@ -746,40 +799,12 @@ export default function Home() {
                 onClick={handleAddNewDebt}
                 className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-xl font-bold shadow-lg transition flex items-center justify-center gap-2"
               >
-                <PlusCircle className="w-5 h-5" />
-                <span>إضافة للمبلغ الحالي</span>
+                <span>إضافة الدين وتحديث الحساب</span>
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-2 shadow-lg">
-        <div className="flex items-center justify-around max-w-md mx-auto">
-          <button onClick={() => navigate('/')} className="flex flex-col items-center py-2 text-emerald-500">
-            <DollarSign className="w-6 h-6" />
-            <span className="text-xs mt-1 font-medium">{t('home')}</span>
-          </button>
-          <button onClick={() => navigate('/debts')} className="flex flex-col items-center py-2 text-gray-400">
-            <Bell className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('debts')}</span>
-          </button>
-          <button onClick={() => navigate('/debts/add')} className="relative -mt-8">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-xl">
-              <Plus className="w-8 h-8 text-white" />
-            </div>
-          </button>
-          <button onClick={() => navigate('/debts')} className="flex flex-col items-center py-2 text-gray-400">
-            <Users className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('people')}</span>
-          </button>
-          <button onClick={() => navigate('/settings')} className="flex flex-col items-center py-2 text-gray-400">
-            <Settings className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('settings')}</span>
-          </button>
-        </div>
-      </nav>
     </div>
   );
 }
