@@ -32,20 +32,62 @@ export default function DebtList() {
   const [sortBy, setSortBy] = useState('newest');
   const [showFilters, setShowFilters] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [isClearingAll, setIsClearingAll] = useState(false);
   const [expandedScheduleId, setExpandedScheduleId] = useState(null);
 
-  // دالة حذف سجل الديون المحددة من LocalStorage والـ State
-  const handleClearSpecificData = (keysToDelete = ['debts', 'pending_offline_debts']) => {
+  // دالة مسح كل الديون المربوطة بالسحابة، التخزين المحلي، وقاعدة بيانات التطبيق بضغطة واحدة
+  const handleClearSpecificData = async (keysToDelete = ['debts', 'pending_offline_debts']) => {
+    if (isClearingAll) return;
+
     const confirmMessage = t('confirmDelete') || 
-      (language === 'ar' ? 'هل أنت تأكد من رغبتك في حذف سجل الديون بالكامل؟' : 'Are you sure you want to delete all debts history?');
+      (language === 'ar' ? 'هل أنت تأكد من رغبتك في حذف جميع الديون نهائياً من التطبيق وقاعدة البيانات؟' : 'Are you sure you want to delete all debts history from the app and database?');
 
     if (window.confirm(confirmMessage)) {
+      setIsClearingAll(true);
+      const companyName = currentUser?.companyName || currentUser?.company_name || '';
+      const userId = currentUser?.id || currentUser?._id || 'guest';
+
       try {
+        // 1. طلب مسح جميع الديون من السحابة / قاعدة البيانات
+        const response = await fetch('https://my-dept-2.vercel.app/api/Delete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': String(userId),
+            'x-tenant-schema': companyName ? `schema_${companyName.toLowerCase().replace(/[^a-zA-Z0-9_]/g, '')}` : ''
+          },
+          body: JSON.stringify({
+            action: 'DELETE_ALL',
+            companyName: companyName,
+            userId: userId
+          })
+        });
+
+        const resData = await response.json();
+
+        if (!response.ok || (resData.success !== undefined && !resData.success)) {
+          throw new Error(resData.error || 'Failed to clear all debts on server');
+        }
+
+        // 2. مسح البيانات من LocalStorage والـ State
         keysToDelete.forEach(key => localStorage.removeItem(key));
         if (setDebts) setDebts([]);
+
+        // 3. التزامن ومسح البيانات محلياً من تطبيق الأندرويد (Room / SQLite)
+        if (window.AndroidBridge) {
+          if (typeof window.AndroidBridge.clearAllDebtsLocally === 'function') {
+            window.AndroidBridge.clearAllDebtsLocally();
+          } else if (typeof window.AndroidBridge.deleteAllDebtsFromLocalDb === 'function') {
+            window.AndroidBridge.deleteAllDebtsFromLocalDb();
+          }
+        }
+
         window.location.reload();
       } catch (error) {
         console.error('Error clearing specific data:', error);
+        alert(language === 'ar' ? 'حدث خطأ أثناء مسح البيانات، يرجى التأكد من اتصال الاتصال بالإنترنت' : 'Failed to clear all debts history');
+      } finally {
+        setIsClearingAll(false);
       }
     }
   };
@@ -338,14 +380,15 @@ export default function DebtList() {
           </div>
         </div>
 
-        {/* زرار مسح سجل الديون فقط */}
+        {/* زر مسح سجل الديون كاملاً من السحابة وقاعدة البيانات والتطبيق */}
         <button
           type="button"
+          disabled={isClearingAll}
           onClick={() => handleClearSpecificData(['debts', 'pending_offline_debts'])}
-          className="w-full py-4 rounded-2xl border-2 border-red-500 text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 transition flex items-center justify-center gap-3"
+          className="w-full py-4 rounded-2xl border-2 border-red-500 text-red-500 font-bold hover:bg-red-50 dark:hover:bg-red-900/20 transition flex items-center justify-center gap-3 disabled:opacity-50"
         >
-          <Trash className="w-5 h-5" />
-          {language === 'ar' ? 'مسح سجل الديون فقط' : 'Clear Debts History Only'}
+          <Trash className={`w-5 h-5 ${isClearingAll ? 'animate-spin' : ''}`} />
+          {language === 'ar' ? 'مسح سجل الديون بالكامل' : 'Clear All Debts History'}
         </button>
       </div>
 
@@ -463,7 +506,7 @@ export default function DebtList() {
                             </a>
                           )}
                           
-                          {/* زر الحذف */}
+                          {/* زر الحذف الفردي لـ الدين الخاص بالعميل */}
                           <button
                             type="button"
                             disabled={isDeleting}
