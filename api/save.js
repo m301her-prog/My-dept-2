@@ -96,11 +96,25 @@ export default async function handler(req, res) {
             const notes = d.notes || null;
             const createdAt = d.createdAt || d.created_at || new Date().toISOString();
 
-            // query الإدخال المباشر للجدول الخاص بك
+            // استخراج وإعداد حقول الجدولة والعملة وحركة الدفعات
+            const currency = d.currency || 'DZD';
+            const isScheduled = d.isScheduled !== undefined ? d.isScheduled : (d.is_scheduled !== undefined ? d.is_scheduled : false);
+            const scheduleType = d.scheduleType || d.schedule_type || null;
+            const installmentsCount = parseInt(d.installmentsCount || d.installments_count) || 0;
+            const firstPaymentDate = d.firstPaymentDate || d.first_payment_date || null;
+            
+            const scheduleDataRaw = d.scheduleData || d.schedule_data || null;
+            const scheduleData = scheduleDataRaw ? JSON.stringify(scheduleDataRaw) : null;
+            
+            const paymentsListRaw = d.paymentsList || d.payments_list || null;
+            const paymentsList = paymentsListRaw ? JSON.stringify(paymentsListRaw) : null;
+
+            // query الإدخال المباشر للجدول مع دعم الجدولة
             query = `
                 INSERT INTO debts (
-                    id, user_id, title, amount, type, person_name, person_phone, due_date, status, notes, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    id, user_id, title, amount, type, person_name, person_phone, due_date, status, notes, created_at,
+                    currency, is_scheduled, schedule_type, installments_count, first_payment_date, schedule_data, payments_list
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 ON CONFLICT (id) DO UPDATE SET
                     user_id = EXCLUDED.user_id,
                     title = EXCLUDED.title,
@@ -110,7 +124,14 @@ export default async function handler(req, res) {
                     person_phone = EXCLUDED.person_phone,
                     due_date = EXCLUDED.due_date,
                     status = EXCLUDED.status,
-                    notes = EXCLUDED.notes
+                    notes = EXCLUDED.notes,
+                    currency = EXCLUDED.currency,
+                    is_scheduled = EXCLUDED.is_scheduled,
+                    schedule_type = EXCLUDED.schedule_type,
+                    installments_count = EXCLUDED.installments_count,
+                    first_payment_date = EXCLUDED.first_payment_date,
+                    schedule_data = EXCLUDED.schedule_data,
+                    payments_list = EXCLUDED.payments_list
                 RETURNING *;
             `;
 
@@ -125,7 +146,14 @@ export default async function handler(req, res) {
                 dueDate,
                 status,
                 notes,
-                createdAt
+                createdAt,
+                currency,
+                isScheduled,
+                scheduleType,
+                installmentsCount,
+                firstPaymentDate,
+                scheduleData,
+                paymentsList
             ];
 
         } else if (['DELETE', 'DELETE_DEBT', 'DELETE_DATA'].includes(action)) {
