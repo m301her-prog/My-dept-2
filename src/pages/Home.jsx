@@ -33,8 +33,8 @@ export default function Home() {
     t,
     user,
     isAdmin,
-    debts,
-    statistics,
+    debts = [],
+    statistics = { totalDebts: 0, paidRatio: 0, totalOwedToMe: 0, totalIOwe: 0, paidDebtsCount: 0, pendingDebtsCount: 0 },
     language,
     setLanguage,
     darkMode,
@@ -71,7 +71,7 @@ export default function Home() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-tenant-schema': item.tenantSchema || reqHeaderSchema || '',
+            'x-tenant-schema': item.tenantSchema || '',
             'x-installment-count': item.installmentsCount ? String(item.installmentsCount) : ''
           },
           body: JSON.stringify(item)
@@ -89,7 +89,6 @@ export default function Home() {
     localStorage.setItem('pending_offline_debts', JSON.stringify(remainingQueue));
   };
 
-  // تفعيل المزامنة عند فتح الصفحة وعند عودة الاتصال بالنت
   useEffect(() => {
     if (navigator.onLine) {
       syncOfflineData();
@@ -130,12 +129,8 @@ export default function Home() {
   }, [debts, t, notificationsEnabled, sendNotification]);
 
   const recentDebts = debts
+    .slice()
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .slice(0, 5);
-
-  const upcomingDebts = debts
-    .filter(d => d.status !== 'paid')
-    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
     .slice(0, 5);
 
   const formatCurrency = (amount, currency) => {
@@ -145,7 +140,7 @@ export default function Home() {
       currency: currency || 'DZD',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
-    }).format(amount);
+    }).format(amount || 0);
   };
 
   const formatDate = (dateString) => {
@@ -157,14 +152,6 @@ export default function Home() {
     });
   };
 
-  const getDebtTypeIcon = (type) => {
-    return type === 'owed_to_me' ? (
-      <TrendingUp className="w-5 h-5 text-emerald-500" />
-    ) : (
-      <TrendingDown className="w-5 h-5 text-red-500" />
-    );
-  };
-
   const getStatusColor = (debt) => {
     if (debt.status === 'paid') return 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400';
     const dueDate = new Date(debt.dueDate);
@@ -172,15 +159,12 @@ export default function Home() {
     return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400';
   };
 
-  // --- دالة موحدة لتصدير وحفظ PDF متوافقة مع أندرويد والمتصفح ---
   const saveAndExportPDF = async (element, fileName, opt) => {
     if (!Capacitor.isNativePlatform()) {
-      // للمتصفح العادي
       html2pdf().set(opt).from(element).save();
       return;
     }
 
-    // لتطبيق أندرويد عبر Capacitor
     try {
       const pdfBase64 = await html2pdf()
         .set(opt)
@@ -206,7 +190,6 @@ export default function Home() {
     }
   };
 
-  // --- 1. تصدير الجدول بالكامل PDF ---
   const handleDownloadTablePDF = async () => {
     const element = document.getElementById('debts-table-container');
     const fileName = `جدول_الديون_${new Date().toISOString().slice(0, 10)}.pdf`;
@@ -221,7 +204,6 @@ export default function Home() {
     await saveAndExportPDF(element, fileName, opt);
   };
 
-  // --- 2. عرض واستخراج شيك الدين الأساسي PDF مع جدول الأقساط والدين الإجمالي ---
   const handlePrintCheckPDF = async (debt) => {
     const history = debt.history || [];
     const installments = history.filter(h => h.type === 'installment' || h.type === 'payment');
@@ -248,7 +230,6 @@ export default function Home() {
     checkElement.innerHTML = `
       <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
         <div style="border: 3px solid #059669; padding: 25px; border-radius: 15px; background: #f0fdf4; max-width: 750px; margin: auto;">
-          
           <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 20px;">
             <div>
               <h2 style="color: #059669; margin: 0; font-size: 22px;">شيك إثبات وسجل دين</h2>
@@ -322,7 +303,6 @@ export default function Home() {
     await saveAndExportPDF(checkElement, fileName, opt);
   };
 
-  // --- 3. خصم القسط واستخراج شيك سداد مع جدول كشف الحساب الأقساط كاملًا ---
   const handlePayInstallment = async () => {
     if (!installmentAmount || isNaN(installmentAmount) || installmentAmount <= 0) return;
 
@@ -330,7 +310,6 @@ export default function Home() {
     const newAmount = Math.max(0, selectedDebt.amount - amountPaid);
     const updatedStatus = newAmount === 0 ? 'paid' : selectedDebt.status;
 
-    // حساب خصم قسط واحد من عدد الدفعات المتبقية
     const currentInstallmentsCount = customInstallmentCount !== '' 
       ? parseInt(customInstallmentCount, 10) 
       : (selectedDebt.installmentsCount !== undefined ? selectedDebt.installmentsCount : 0);
@@ -347,7 +326,6 @@ export default function Home() {
 
     const updatedHistory = [...(selectedDebt.history || []), newHistoryItem];
 
-    // إرسال هيدر لفتح/تحديث عدد الأقساط الخاصة بالدين عبر الـ API إذا وُجدت المزامنة
     try {
       await fetch('/api/your-backend-endpoint', {
         method: 'POST',
@@ -365,7 +343,6 @@ export default function Home() {
       // التعامل مع حالة الأوفلاين
     }
 
-    // تحديث الحالة في AppContext / Database
     if (updateDebt) {
       updateDebt(selectedDebt.id, {
         ...selectedDebt,
@@ -390,7 +367,6 @@ export default function Home() {
       </tr>
     `).join('');
 
-    // استخراج شيك سداد القسط PDF يتضمن جدول بكافة الأقساط
     const receiptElement = document.createElement('div');
     receiptElement.innerHTML = `
       <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
@@ -456,14 +432,12 @@ export default function Home() {
 
     await saveAndExportPDF(receiptElement, fileName, opt);
 
-    // إعادة ضبط الحالة وإغلاق Modal
     setIsModalOpen(false);
     setInstallmentAmount('');
     setCustomInstallmentCount('');
     setSelectedDebt(null);
   };
 
-  // --- 4. دالة إضافة دين جديد وزيادته على المبلغ الموجود وتحديث السجل ---
   const handleAddNewDebt = () => {
     if (!additionalDebtAmount || isNaN(additionalDebtAmount) || additionalDebtAmount <= 0) return;
 
@@ -605,7 +579,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Recent Activity Table with PDF Exports & Actions */}
+      {/* Recent Activity Table */}
       {recentDebts.length > 0 && (
         <div className="px-4 mb-6">
           <div className="flex items-center justify-between mb-3">
@@ -614,7 +588,6 @@ export default function Home() {
               {t('recentActivity')}
             </h2>
             
-            {/* زرار تحميل الجدول بالكامل PDF مع إشارة المشاركة */}
             <button
               onClick={handleDownloadTablePDF}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg shadow transition font-medium"
@@ -654,7 +627,6 @@ export default function Home() {
                         </span>
                       </td>
                       <td className="p-3 flex items-center gap-2">
-                        {/* 1. زرار عرض ومشاركة الشيك PDF */}
                         <button
                           onClick={() => handlePrintCheckPDF(debt)}
                           title="عرض ومشاركة الشيك PDF"
@@ -665,7 +637,6 @@ export default function Home() {
                           <span className="text-[10px] font-bold border border-blue-400 px-0.5 rounded">PDF</span>
                         </button>
 
-                        {/* 2. زرار إضافة قسط وخصمه */}
                         <button
                           onClick={() => {
                             setSelectedDebt(debt);
@@ -679,7 +650,6 @@ export default function Home() {
                           <span>قسط</span>
                         </button>
 
-                        {/* 3. زرار إضافة دين جديد (زيادة على الدين الحالي) */}
                         <button
                           onClick={() => {
                             setSelectedAddDebt(debt);
@@ -723,45 +693,53 @@ export default function Home() {
               عدد الأقساط الحالية: <span className="font-bold text-blue-600">{selectedDebt.installmentsCount !== undefined ? selectedDebt.installmentsCount : '-'}</span>
             </p>
 
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                تعديل/فتح إجمالي عدد الأقساط (Header: x-installment-count):
-              </label>
-              <input
-                type="number"
-                value={customInstallmentCount}
-                onChange={(e) => setCustomInstallmentCount(e.target.value)}
-                placeholder="أدخل عدد الأقساط الكلي..."
-                className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
-              />
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  تعديل/فتح إجمالي عدد الأقساط (Header: x-installment-count):
+                </label>
+                <input
+                  type="number"
+                  value={customInstallmentCount}
+                  onChange={(e) => setCustomInstallmentCount(e.target.value)}
+                  placeholder="عدد الأقساط الكلي..."
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
 
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                مبلغ القسط المراد خصمه:
-              </label>
-              <input
-                type="number"
-                value={installmentAmount}
-                onChange={(e) => setInstallmentAmount(e.target.value)}
-                placeholder="أدخل مبلغ القسط..."
-                className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  مبلغ القسط المراد خصمه:
+                </label>
+                <input
+                  type="number"
+                  value={installmentAmount}
+                  onChange={(e) => setInstallmentAmount(e.target.value)}
+                  placeholder="المبلغ..."
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={handlePayInstallment}
-                className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-xl font-bold shadow-lg transition flex items-center justify-center gap-2"
-              >
-                <span>تسديد قسط ومشاركة</span>
-                <Share2 className="w-4 h-4" />
-                <span className="text-xs bg-emerald-700 px-1.5 py-0.5 rounded border border-emerald-400">PDF</span>
-              </button>
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={handlePayInstallment}
+                  className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-2 rounded-xl transition text-sm shadow"
+                >
+                  تأكيد الخصم وطباعة PDF
+                </button>
+                <button
+                  onClick={() => setIsModalOpen(false)}
+                  className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 rounded-xl text-sm font-medium"
+                >
+                  إلغاء
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal إضافة دين جديد (زيادة على الدين الحالي) */}
+      {/* Modal إضافة دين جديد */}
       {isAddDebtModalOpen && selectedAddDebt && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
@@ -773,34 +751,42 @@ export default function Home() {
             </button>
 
             <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
-              إضافة دين جديد للعميل
+              إضافة دين جديد على الحساب
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
               العميل: <span className="font-semibold text-gray-800 dark:text-gray-200">{selectedAddDebt.personName}</span>
               <br />
-              الدين الحالي: <span className="font-bold text-emerald-600">{formatCurrency(selectedAddDebt.amount, selectedAddDebt.currency)}</span>
+              المبلغ الحالي: <span className="font-bold text-red-500">{formatCurrency(selectedAddDebt.amount, selectedAddDebt.currency)}</span>
             </p>
 
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                المبلغ المراد إضافته للدين:
-              </label>
-              <input
-                type="number"
-                value={additionalDebtAmount}
-                onChange={(e) => setAdditionalDebtAmount(e.target.value)}
-                placeholder="أدخل المبلغ الإضافي..."
-                className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-              />
-            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  المبلغ الإضافي المراد زيادته:
+                </label>
+                <input
+                  type="number"
+                  value={additionalDebtAmount}
+                  onChange={(e) => setAdditionalDebtAmount(e.target.value)}
+                  placeholder="المبلغ الإضافي..."
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white text-sm focus:ring-2 focus:ring-purple-500 outline-none"
+                />
+              </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={handleAddNewDebt}
-                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-xl font-bold shadow-lg transition flex items-center justify-center gap-2"
-              >
-                <span>إضافة الدين وتحديث الحساب</span>
-              </button>
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={handleAddNewDebt}
+                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 rounded-xl transition text-sm shadow"
+                >
+                  إضافة وإعادة تفعيل الدين
+                </button>
+                <button
+                  onClick={() => setIsAddDebtModalOpen(false)}
+                  className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 rounded-xl text-sm font-medium"
+                >
+                  إلغاء
+                </button>
+              </div>
             </div>
           </div>
         </div>
