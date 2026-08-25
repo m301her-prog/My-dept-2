@@ -25,7 +25,8 @@ import {
   CreditCard,
   X,
   Share2,
-  PlusCircle
+  PlusCircle,
+  Layers
 } from 'lucide-react';
 
 export default function Home() {
@@ -56,6 +57,9 @@ export default function Home() {
   const [selectedAddDebt, setSelectedAddDebt] = useState(null);
   const [additionalDebtAmount, setAdditionalDebtAmount] = useState('');
   const [isAddDebtModalOpen, setIsAddDebtModalOpen] = useState(false);
+
+  // حساب إجمالي عدد الأقساط المتبقية عبر جميع الديون
+  const totalInstallmentsCount = debts.reduce((acc, curr) => acc + (Number(curr.installmentsCount) || 0), 0);
 
   // --- دالة مزامنة البيانات غير المحفوظة عند عودة النت ---
   const syncOfflineData = async () => {
@@ -252,7 +256,7 @@ export default function Home() {
               <h2 style="color: #059669; margin: 0; font-size: 22px;">شيك إثبات وسجل دين</h2>
               <span style="font-size: 12px; color: #666;">كشف حساب تفصيلي للشخص</span>
             </div>
-            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #059669;">تاريخ التقرير: ${formatDate(new Date())}</span>
+            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #059669;">تاريخ التتقرير: ${formatDate(new Date())}</span>
           </div>
 
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; background: #fff; padding: 15px; border-radius: 10px; border: 1px solid #e5e7eb;">
@@ -317,12 +321,17 @@ export default function Home() {
     await saveAndExportPDF(checkElement, fileName, opt);
   };
 
-  // --- 3. خصم القسط واستخراج شيك سداد مع جدول كشف الحساب الأقساط كاملًا ---
+  // --- 3. خصم القسط وخصم عدد الأقساط واستخراج شيك سداد مع جدول كشف الحساب الأقساط كاملًا ---
   const handlePayInstallment = async () => {
     if (!installmentAmount || isNaN(installmentAmount) || installmentAmount <= 0) return;
 
     const amountPaid = parseFloat(installmentAmount);
     const newAmount = Math.max(0, selectedDebt.amount - amountPaid);
+    
+    // خصم قسط واحد من عدد الأقساط المسجلة للدين
+    const currentInstallmentsCount = Number(selectedDebt.installmentsCount) || 0;
+    const newInstallmentsCount = Math.max(0, currentInstallmentsCount - 1);
+
     const updatedStatus = newAmount === 0 ? 'paid' : selectedDebt.status;
 
     const newHistoryItem = {
@@ -335,11 +344,12 @@ export default function Home() {
 
     const updatedHistory = [...(selectedDebt.history || []), newHistoryItem];
 
-    // تحديث الحالة في AppContext / Database
+    // تحديث الحالة والأقساط في AppContext / Database
     if (updateDebt) {
       updateDebt(selectedDebt.id, {
         ...selectedDebt,
         amount: newAmount,
+        installmentsCount: newInstallmentsCount,
         status: updatedStatus,
         history: updatedHistory
       });
@@ -381,6 +391,9 @@ export default function Home() {
             </div>
             <div style="font-size: 15px;">
               <span>المبلغ المتبقي الكلي: </span><strong style="color: #dc2626;">${formatCurrency(newAmount, selectedDebt.currency)}</strong>
+            </div>
+            <div style="font-size: 15px;">
+              <span>الأقساط المتبقية: </span><strong>${newInstallmentsCount}</strong>
             </div>
             <div style="font-size: 15px;">
               <span>حالة الدين: </span><strong>${updatedStatus === 'paid' ? 'مكتمل السداد' : 'قيد السداد'}</strong>
@@ -544,6 +557,19 @@ export default function Home() {
             </p>
           </div>
 
+          {/* هيدر عرض إجمالي عدد الأقساط */}
+          <div className="col-span-2 bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl border-l-4 border-blue-500 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+                <Layers className="w-5 h-5 text-blue-500" />
+              </div>
+              <div>
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-medium block">إجمالي عدد الأقساط المتبقية</span>
+                <span className="text-2xl font-bold text-blue-600 dark:text-blue-400">{totalInstallmentsCount} قسط</span>
+              </div>
+            </div>
+          </div>
+
           <div className="col-span-2 bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
@@ -598,6 +624,7 @@ export default function Home() {
                   <tr>
                     <th className="p-3">الاسم</th>
                     <th className="p-3">المبلغ</th>
+                    <th className="p-3">الأقساط</th>
                     <th className="p-3">الحالة</th>
                     <th className="p-3">إجراءات (مشاركة PDF / أقساط / إضافة)</th>
                   </tr>
@@ -608,6 +635,9 @@ export default function Home() {
                       <td className="p-3 font-semibold">{debt.personName}</td>
                       <td className={`p-3 font-bold ${debt.type === 'owed_to_me' ? 'text-emerald-500' : 'text-red-500'}`}>
                         {formatCurrency(debt.amount, debt.currency)}
+                      </td>
+                      <td className="p-3 font-medium text-blue-600 dark:text-blue-400">
+                        {debt.installmentsCount || 0}
                       </td>
                       <td className="p-3">
                         <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(debt)}`}>
@@ -679,6 +709,8 @@ export default function Home() {
               العميل: <span className="font-semibold text-gray-800 dark:text-gray-200">{selectedDebt.personName}</span>
               <br />
               إجمالي الدين الحالي: <span className="font-bold text-emerald-600">{formatCurrency(selectedDebt.amount, selectedDebt.currency)}</span>
+              <br />
+              الأقساط المتبقية: <span className="font-bold text-blue-600">{selectedDebt.installmentsCount || 0}</span>
             </p>
 
             <div className="mb-4">
