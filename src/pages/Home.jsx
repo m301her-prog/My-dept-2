@@ -219,34 +219,87 @@ export default function Home() {
     await saveAndExportPDF(element, fileName, opt);
   };
 
-  // --- 2. عرض واستخراج شيك الدين الأساسي PDF ---
+  // --- 2. عرض واستخراج شيك الدين الأساسي PDF مع جدول الأقساط والدين الإجمالي ---
   const handlePrintCheckPDF = async (debt) => {
+    const history = debt.history || [];
+    const installments = history.filter(h => h.type === 'installment' || h.type === 'payment');
+
+    const historyRows = history.length > 0 ? history.map((item, index) => `
+      <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
+        <td style="padding: 8px; text-align: center;">${index + 1}</td>
+        <td style="padding: 8px; text-align: center;">${formatDate(item.date || new Date())}</td>
+        <td style="padding: 8px; text-align: center; color: ${item.type === 'add' ? '#dc2626' : '#16a34a'}; font-weight: bold;">
+          ${item.type === 'add' ? 'إضافة دين (+)' : 'سداد قسط (-)'}
+        </td>
+        <td style="padding: 8px; text-align: center; font-weight: bold;">
+          ${formatCurrency(item.amount, debt.currency)}
+        </td>
+        <td style="padding: 8px; text-align: center;">${item.note || '-'}</td>
+      </tr>
+    `).join('') : `
+      <tr>
+        <td colspan="5" style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">لا توجد حركة أقساط سابقة سجلت لهذا الدين</td>
+      </tr>
+    `;
+
     const checkElement = document.createElement('div');
     checkElement.innerHTML = `
-      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right;">
-        <div style="border: 4px double #059669; padding: 25px; border-radius: 15px; background: #f0fdf4; width: 600px; margin: auto;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 10px; margin-bottom: 20px;">
-            <h2 style="color: #059669; margin: 0; font-size: 24px;">شيك إثبات دين</h2>
-            <span style="font-size: 14px; color: #666;">التاريخ: ${formatDate(new Date())}</span>
+      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
+        <div style="border: 3px solid #059669; padding: 25px; border-radius: 15px; background: #f0fdf4; max-width: 750px; margin: auto;">
+          
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 20px;">
+            <div>
+              <h2 style="color: #059669; margin: 0; font-size: 22px;">شيك إثبات وسجل دين</h2>
+              <span style="font-size: 12px; color: #666;">كشف حساب تفصيلي للشخص</span>
+            </div>
+            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #059669;">تاريخ التقرير: ${formatDate(new Date())}</span>
           </div>
-          <div style="margin-bottom: 15px; font-size: 18px;">
-            <span>المبلغ: </span>
-            <strong style="color: #059669; font-size: 22px; background: #fff; padding: 5px 15px; border-radius: 8px; border: 1px solid #ccc;">
-              ${formatCurrency(debt.amount, debt.currency)}
-            </strong>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; background: #fff; padding: 15px; border-radius: 10px; border: 1px solid #e5e7eb;">
+            <div style="font-size: 15px;">
+              <span style="color: #555;">الاسم / الطرف الثاني: </span><strong style="color: #111;">${debt.personName}</strong>
+            </div>
+            <div style="font-size: 15px;">
+              <span style="color: #555;">نوع الدين: </span><strong>${debt.type === 'owed_to_me' ? 'مستحق لي (له)' : 'مستحق علي (عليه)'}</strong>
+            </div>
+            <div style="font-size: 15px;">
+              <span style="color: #555;">تاريخ الاستحقاق: </span><strong>${formatDate(debt.dueDate)}</strong>
+            </div>
+            <div style="font-size: 15px;">
+              <span style="color: #555;">الحالة الحالية: </span><strong style="color: ${debt.status === 'paid' ? '#16a34a' : '#d97706'};">${debt.status === 'paid' ? 'تم السداد بالكامل' : 'متبقي'}</strong>
+            </div>
           </div>
-          <div style="margin-bottom: 12px; font-size: 16px;">
-            <span>الاسم / الطرف الثاني: </span><strong>${debt.personName}</strong>
+
+          <div style="margin-bottom: 20px; background: #e6f4ea; padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #a7f3d0;">
+            <div>
+              <div style="font-size: 13px; color: #047857;">المبلغ الحالي / المتبقي للدفعة:</div>
+              <div style="font-size: 22px; font-weight: bold; color: #065f46;">${formatCurrency(debt.amount, debt.currency)}</div>
+            </div>
+            <div style="text-align: left;">
+              <div style="font-size: 13px; color: #047857;">عدد الأقساط المسددة:</div>
+              <div style="font-size: 18px; font-weight: bold; color: #065f46;">${installments.length}</div>
+            </div>
           </div>
-          <div style="margin-bottom: 12px; font-size: 16px;">
-            <span>نوع الدين: </span><strong>${debt.type === 'owed_to_me' ? 'مستحق لي (له)' : 'مستحق علي (عليه)'}</strong>
-          </div>
-          <div style="margin-bottom: 20px; font-size: 16px;">
-            <span>تاريخ الاستحقاق: </span><strong>${formatDate(debt.dueDate)}</strong>
-          </div>
-          <div style="display: flex; justify-content: space-between; margin-top: 30px; border-top: 1px dashed #ccc; padding-top: 15px;">
-            <p style="margin: 0;">توقيع المحرر: ...................</p>
-            <p style="margin: 0;">توقيع المستلم: ...................</p>
+
+          <h3 style="font-size: 16px; color: #059669; margin-bottom: 10px;">جدول الأقساط والتحركات (السجل)</h3>
+          <table style="width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 20px; border: 1px solid #d1d5db;">
+            <thead>
+              <tr style="background: #059669; color: #fff; font-size: 13px;">
+                <th style="padding: 8px; text-align: center;">#</th>
+                <th style="padding: 8px; text-align: center;">التاريخ</th>
+                <th style="padding: 8px; text-align: center;">نوع العملية</th>
+                <th style="padding: 8px; text-align: center;">المبلغ</th>
+                <th style="padding: 8px; text-align: center;">ملاحظات</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${historyRows}
+            </tbody>
+          </table>
+
+          <div style="display: flex; justify-content: space-between; margin-top: 30px; border-top: 1px dashed #059669; padding-top: 15px;">
+            <p style="margin: 0; font-size: 14px;">توقيع المحرر: ...................</p>
+            <p style="margin: 0; font-size: 14px;">توقيع المستلم: ...................</p>
           </div>
         </div>
       </div>
@@ -258,13 +311,13 @@ export default function Home() {
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
       html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a5', orientation: 'landscape' }
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
     await saveAndExportPDF(checkElement, fileName, opt);
   };
 
-  // --- 3. خصم القسط واستخراج شيك سداد ---
+  // --- 3. خصم القسط واستخراج شيك سداد مع جدول كشف الحساب الأقساط كاملًا ---
   const handlePayInstallment = async () => {
     if (!installmentAmount || isNaN(installmentAmount) || installmentAmount <= 0) return;
 
@@ -272,43 +325,87 @@ export default function Home() {
     const newAmount = Math.max(0, selectedDebt.amount - amountPaid);
     const updatedStatus = newAmount === 0 ? 'paid' : selectedDebt.status;
 
+    const newHistoryItem = {
+      id: Date.now(),
+      type: 'installment',
+      amount: amountPaid,
+      date: new Date().toISOString(),
+      note: 'تسديد قسط'
+    };
+
+    const updatedHistory = [...(selectedDebt.history || []), newHistoryItem];
+
     // تحديث الحالة في AppContext / Database
     if (updateDebt) {
       updateDebt(selectedDebt.id, {
         ...selectedDebt,
         amount: newAmount,
-        status: updatedStatus
+        status: updatedStatus,
+        history: updatedHistory
       });
     }
 
-    // استخراج شيك سداد القسط PDF
+    const historyRows = updatedHistory.map((item, index) => `
+      <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
+        <td style="padding: 8px; text-align: center;">${index + 1}</td>
+        <td style="padding: 8px; text-align: center;">${formatDate(item.date || new Date())}</td>
+        <td style="padding: 8px; text-align: center; color: ${item.type === 'add' ? '#dc2626' : '#16a34a'}; font-weight: bold;">
+          ${item.type === 'add' ? 'إضافة دين (+)' : 'سداد قسط (-)'}
+        </td>
+        <td style="padding: 8px; text-align: center; font-weight: bold;">
+          ${formatCurrency(item.amount, selectedDebt.currency)}
+        </td>
+        <td style="padding: 8px; text-align: center;">${item.note || '-'}</td>
+      </tr>
+    `).join('');
+
+    // استخراج شيك سداد القسط PDF يتضمن جدول بكافة الأقساط
     const receiptElement = document.createElement('div');
     receiptElement.innerHTML = `
-      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right;">
-        <div style="border: 3px solid #2563eb; padding: 25px; border-radius: 15px; background: #eff6ff; width: 600px; margin: auto;">
+      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
+        <div style="border: 3px solid #2563eb; padding: 25px; border-radius: 15px; background: #eff6ff; max-width: 750px; margin: auto;">
           <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #2563eb; padding-bottom: 10px; margin-bottom: 20px;">
-            <h2 style="color: #2563eb; margin: 0; font-size: 24px;">شيك سداد قسط</h2>
-            <span style="font-size: 14px; color: #666;">التاريخ: ${formatDate(new Date())}</span>
+            <div>
+              <h2 style="color: #2563eb; margin: 0; font-size: 22px;">شيك وتوصيل سداد قسط</h2>
+              <span style="font-size: 12px; color: #666;">وصل إثبات عملية دفع وتحديث الحساب</span>
+            </div>
+            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #2563eb;">التاريخ: ${formatDate(new Date())}</span>
           </div>
-          <div style="margin-bottom: 12px; font-size: 16px;">
-            <span>اسم العميل / الطرف: </span><strong>${selectedDebt.personName}</strong>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; background: #fff; padding: 12px; border-radius: 10px; border: 1px solid #dbeafe;">
+            <div style="font-size: 15px;">
+              <span>اسم العميل / الطرف: </span><strong style="color: #111;">${selectedDebt.personName}</strong>
+            </div>
+            <div style="font-size: 15px;">
+              <span>المبلغ المدفوع (القسط الحالي): </span><strong style="color: #16a34a;">${formatCurrency(amountPaid, selectedDebt.currency)}</strong>
+            </div>
+            <div style="font-size: 15px;">
+              <span>المبلغ المتبقي الكلي: </span><strong style="color: #dc2626;">${formatCurrency(newAmount, selectedDebt.currency)}</strong>
+            </div>
+            <div style="font-size: 15px;">
+              <span>حالة الدين: </span><strong>${updatedStatus === 'paid' ? 'مكتمل السداد' : 'قيد السداد'}</strong>
+            </div>
           </div>
-          <div style="margin-bottom: 15px; font-size: 18px;">
-            <span>المبلغ المدفوع (القسط): </span>
-            <strong style="color: #16a34a; font-size: 20px; background: #fff; padding: 5px 12px; border-radius: 6px; border: 1px solid #ccc;">
-              ${formatCurrency(amountPaid, selectedDebt.currency)}
-            </strong>
-          </div>
-          <div style="margin-bottom: 12px; font-size: 16px;">
-            <span>المبلغ المتبقي من الدين: </span>
-            <strong style="color: #dc2626;">${formatCurrency(newAmount, selectedDebt.currency)}</strong>
-          </div>
-          <div style="margin-bottom: 12px; font-size: 16px;">
-            <span>حالة الدين الحالية: </span><strong>${updatedStatus === 'paid' ? 'تم السداد بالكامل' : 'متبقي أقساط'}</strong>
-          </div>
-          <div style="display: flex; justify-content: space-between; margin-top: 30px; border-top: 1px dashed #ccc; padding-top: 15px;">
-            <p style="margin: 0;">توقيع المستلم: ...................</p>
-            <p style="margin: 0;">توقيع الدافع: ...................</p>
+
+          <h3 style="font-size: 15px; color: #2563eb; margin-bottom: 8px;">جدول وحركات الأقساط كاملة</h3>
+          <table style="width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 20px; border: 1px solid #cbd5e1;">
+            <thead>
+              <tr style="background: #2563eb; color: #fff; font-size: 13px;">
+                <th style="padding: 8px; text-align: center;">#</th>
+                <th style="padding: 8px; text-align: center;">التاريخ</th>
+                <th style="padding: 8px; text-align: center;">العملية</th>
+                <th style="padding: 8px; text-align: center;">المبلغ</th>
+                <th style="padding: 8px; text-align: center;">البيان</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${historyRows}
+            </tbody>
+          </table>
+
+          <div style="display: flex; justify-content: space-between; margin-top: 25px; border-top: 1px dashed #2563eb; padding-top: 15px;">
+            <p style="margin: 0; font-size: 14px;">توقيع المستلم: ...................</p>
+            <p style="margin: 0; font-size: 14px;">توقيع الدافع: ...................</p>
           </div>
         </div>
       </div>
@@ -320,7 +417,7 @@ export default function Home() {
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
       html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a5', orientation: 'landscape' }
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
     await saveAndExportPDF(receiptElement, fileName, opt);
@@ -331,18 +428,29 @@ export default function Home() {
     setSelectedDebt(null);
   };
 
-  // --- 4. دالة إضافة دين جديد وزيادته على المبلغ الموجود ---
+  // --- 4. دالة إضافة دين جديد وزيادته على المبلغ الموجود وتحديث السجل ---
   const handleAddNewDebt = () => {
     if (!additionalDebtAmount || isNaN(additionalDebtAmount) || additionalDebtAmount <= 0) return;
 
     const addedAmount = parseFloat(additionalDebtAmount);
     const newTotalAmount = Number(selectedAddDebt.amount) + addedAmount;
 
+    const newHistoryItem = {
+      id: Date.now(),
+      type: 'add',
+      amount: addedAmount,
+      date: new Date().toISOString(),
+      note: 'إضافة دين جديد'
+    };
+
+    const updatedHistory = [...(selectedAddDebt.history || []), newHistoryItem];
+
     if (updateDebt) {
       updateDebt(selectedAddDebt.id, {
         ...selectedAddDebt,
         amount: newTotalAmount,
-        status: selectedAddDebt.status === 'paid' ? 'pending' : selectedAddDebt.status
+        status: selectedAddDebt.status === 'paid' ? 'pending' : selectedAddDebt.status,
+        history: updatedHistory
       });
     }
 
