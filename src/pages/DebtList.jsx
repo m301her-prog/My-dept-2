@@ -16,7 +16,9 @@ import {
   ArrowLeft,
   X,
   Trash2,
-  User
+  Calendar,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 export default function DebtList() {
@@ -29,6 +31,7 @@ export default function DebtList() {
   const [sortBy, setSortBy] = useState('newest');
   const [showFilters, setShowFilters] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [expandedScheduleId, setExpandedScheduleId] = useState(null);
 
   // دالة جلب رقم الهاتف مع التأكيد على حقل person_phone المتواجد في قاعدة البيانات
   const getPhoneNumber = (debt) => {
@@ -133,15 +136,22 @@ export default function DebtList() {
       setDeletingId(debtIdToDelete);
       const previousDebts = [...(debts || [])];
 
-      // 1. التحديث اللحظي للواجهة (UI/State)
-      if (setDebts) {
-        setDebts(prevDebts => 
-          prevDebts.filter(item => {
-            const itemId = String(item.id ?? item._id ?? item.debt_id ?? item.debtId ?? '').trim();
-            return itemId !== debtIdToDelete;
-          })
-        );
-      }
+      // دالة تحديث التخزين المحلي والـ State لضمان عدم استعادة العناصر
+      const updateLocalState = (updatedList) => {
+        if (setDebts) setDebts(updatedList);
+        try {
+          localStorage.setItem('debts', JSON.stringify(updatedList));
+        } catch (err) {
+          console.error('Error updating localStorage:', err);
+        }
+      };
+
+      // 1. التحديث اللحظي للواجهة والذاكرة المحلية
+      const updatedDebts = previousDebts.filter(item => {
+        const itemId = String(item.id ?? item._id ?? item.debt_id ?? item.debtId ?? '').trim();
+        return itemId !== debtIdToDelete;
+      });
+      updateLocalState(updatedDebts);
 
       try {
         const personName = debt.personName || debt.person_name || '';
@@ -183,13 +193,22 @@ export default function DebtList() {
       } catch (error) {
         console.error('Error deleting debt on server:', error);
         // إعادة الحالة السابقة عند الفشل
-        if (setDebts) {
-          setDebts(previousDebts);
-        }
+        updateLocalState(previousDebts);
         alert(language === 'ar' ? 'حدث خطأ أثناء الحذف، يرجى الاتصال بالإنترنت' : 'Failed to delete debt');
       } finally {
         setDeletingId(null);
       }
+    }
+  };
+
+  // دالة مساعدة لاستخراج قوام الأقساط
+  const parseScheduleData = (scheduleData) => {
+    if (!scheduleData) return [];
+    if (Array.isArray(scheduleData)) return scheduleData;
+    try {
+      return JSON.parse(scheduleData);
+    } catch (e) {
+      return [];
     }
   };
 
@@ -323,6 +342,11 @@ export default function DebtList() {
             const personName = debt.personName || debt.person_name || '';
             const dueDate = debt.dueDate || debt.due_date;
 
+            const isScheduled = debt.isScheduled || debt.is_scheduled;
+            const scheduleItems = parseScheduleData(debt.scheduleData || debt.schedule_data);
+            const installmentsCount = debt.installmentsCount || debt.installments_count || scheduleItems.length;
+            const isExpanded = expandedScheduleId === debtId;
+
             return (
               <div
                 key={debtId}
@@ -385,6 +409,14 @@ export default function DebtList() {
                             {getStatusIcon(debt)}
                             {debt.status === 'paid' ? (t('paid') || 'مدفوع') : (t('pending') || 'معلق')}
                           </span>
+                          
+                          {isScheduled && (
+                            <span className="text-xs px-2.5 py-1 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-medium flex items-center gap-1">
+                              <Calendar className="w-3 h-3" />
+                              {installmentsCount} أقساط
+                            </span>
+                          )}
+
                           {debt.currency && debt.currency !== 'DZD' && (
                             <span className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
                               {debt.currency}
@@ -416,6 +448,41 @@ export default function DebtList() {
                           </button>
                         </div>
                       </div>
+
+                      {/* عرض الأقساط والجدولة إن وجدت */}
+                      {isScheduled && scheduleItems.length > 0 && (
+                        <div className="mt-2 bg-blue-50/50 dark:bg-blue-950/20 rounded-xl p-3 border border-blue-100 dark:border-blue-900/30">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedScheduleId(isExpanded ? null : debtId);
+                            }}
+                            className="w-full flex items-center justify-between text-xs font-bold text-blue-700 dark:text-blue-400"
+                          >
+                            <span className="flex items-center gap-1">
+                              جدول الأقساط ({scheduleItems.length})
+                            </span>
+                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
+
+                          {isExpanded && (
+                            <div className="mt-2 space-y-1.5 pt-2 border-t border-blue-100 dark:border-blue-900/30">
+                              {scheduleItems.map((item, idx) => (
+                                <div key={idx} className="flex items-center justify-between text-xs text-gray-700 dark:text-gray-300 py-1 border-b border-gray-100 dark:border-gray-800 last:border-0">
+                                  <span>القسط {item.installmentNumber || item.number || idx + 1}: {formatDate(item.dueDate || item.date)}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold">{formatCurrency(item.amount, debt.currency)}</span>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${item.status === 'paid' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'}`}>
+                                      {item.status === 'paid' ? 'مدفوع' : 'معلق'}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* زر الواتساب (يظهر عند توفر رقم الهاتف) */}
                       {phoneNumber && (
