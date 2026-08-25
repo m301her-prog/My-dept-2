@@ -11,9 +11,9 @@ if (baseConnectionString) {
     pool = new pg.Pool({
         connectionString: finalConnectionString,
         ssl: { rejectUnauthorized: false },
-        max: 20,                  // أقصى عدد اتصالات بالطلب الواضح
-        idleTimeoutMillis: 30000, // إغلاق الاتصال الخامل بعد 30 ثانية
-        connectionTimeoutMillis: 5000 // المهلة الزمنية للاتصال
+        max: 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000
     });
 }
 
@@ -34,7 +34,6 @@ export default async function handler(req, res) {
         return res.status(500).json({ success: false, error: 'DATABASE_URL غير معرف في متغيرات البيئة' });
     }
 
-    // اقتطاع اتصال من الـ Pool
     const client = await pool.connect();
 
     try {
@@ -47,13 +46,12 @@ export default async function handler(req, res) {
         const rawAction = body.action || d.action || 'SAVE';
         const action = rawAction.toString().toUpperCase().trim();
 
-        // 2. استخراج الحقول وتوفير قيم افتراضية منعاً لـ NOT NULL Violations
         const finalId = body.id || body.debtId || d.id || d._id || `debt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         
         let userId = body.userId || body.user_id || d.userId || d.user_id || req.headers['x-user-id'] || null;
         const finalCompanyName = body.companyName || body.company_name || body.company || d.companyName || d.company_name || d.company;
 
-        // 3. تحديد وعزل السكيمّا (Schema Isolation)
+        // تحديد السكيمّا (Schema Isolation)
         let targetSchema = req.headers['x-tenant-schema'];
 
         if (!targetSchema || targetSchema.trim() === '') {
@@ -70,16 +68,37 @@ export default async function handler(req, res) {
 
         const cleanSchema = targetSchema.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
 
-        // توفير قيمة fallback لـ userId إذا لم يرسل صراحةً
         if (!userId || userId.toString().trim() === '') {
             userId = cleanSchema;
         }
 
-        // إعداد السكيمّا المستهدفة
+        // إعداد السكيمّا المستهدفة وإنشاء الجدول والأعمدة إذا لم تكن موجودة
         await client.query(`CREATE SCHEMA IF NOT EXISTS "${cleanSchema}";`);
         await client.query(`SET search_path TO "${cleanSchema}";`);
 
-        // التأكد من إضافة الأعمدة في حال لم تكن موجودة لمنع خطأ Column Does Not Exist
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS debts (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                title TEXT,
+                amount NUMERIC,
+                type TEXT,
+                person_name TEXT,
+                person_phone TEXT,
+                due_date TEXT,
+                status TEXT,
+                notes TEXT,
+                created_at TEXT,
+                currency TEXT DEFAULT 'DZD',
+                is_scheduled BOOLEAN DEFAULT FALSE,
+                schedule_type TEXT,
+                installments_count INTEGER DEFAULT 0,
+                first_payment_date TEXT,
+                schedule_data JSONB,
+                payments_list JSONB
+            );
+        `);
+
         await client.query(`
             ALTER TABLE debts 
             ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'DZD',
@@ -97,7 +116,6 @@ export default async function handler(req, res) {
         const isSaveAction = ['SAVE', 'ADD', 'INSERT', 'UPDATE', 'ADD_DEBT', 'UPDATE_DEBT', 'SAVE_DATA'].includes(action);
 
         if (isSaveAction) {
-            // معالجة ومطابقة كافة الحقول بناءً على تعريف جدول PostgreSQL لديك
             const personName = (d.personName || d.person_name || d.person_Name || 'غير محدد').toString().trim();
             const title = (d.title || d.notes || `دين: ${personName}`).toString().trim();
             const amount = parseFloat(d.amount) || 0.00;
@@ -108,20 +126,27 @@ export default async function handler(req, res) {
             const notes = d.notes || null;
             const createdAt = d.createdAt || d.created_at || new Date().toISOString();
 
-            // استخراج وإعداد حقول الجدولة والعملة وحركة الدفعات
             const currency = d.currency || 'DZD';
-            const isScheduled = d.isScheduled !== undefined ? d.isScheduled : (d.is_scheduled !== undefined ? d.is_scheduled : false);
+            
+            // ضبط قيمة is_scheduled لتحويلها صراحة إلى Boolean حقيقي
+            const rawIsScheduled = d.isScheduled !== undefined ? d.isScheduled : d.is_scheduled;
+            const isScheduled = rawIsScheduled === true || rawIsScheduled === 'true' || rawIsScheduled === 1 || rawIsScheduled === '1';
+            
             const scheduleType = d.scheduleType || d.schedule_type || null;
             const installmentsCount = parseInt(d.installmentsCount || d.installments_count) || 0;
             const firstPaymentDate = d.firstPaymentDate || d.first_payment_date || null;
             
-            const scheduleDataRaw = d.scheduleData || d.schedule_data || null;
-            const scheduleData = scheduleDataRaw ? JSON.stringify(scheduleDataRaw) : null;
-            
-            const paymentsListRaw = d.paymentsList || d.payments_list || null;
-            const paymentsList = paymentsListRaw ? JSON.stringify(paymentsListRaw) : null;
+            // التعامل مع JSONB بدون تحويله إلى String (إرساله كـ Object أو Array مباشرة لـ pg)
+            let scheduleData = d.scheduleData || d.schedule_data || null;
+            if (typeof scheduleData === 'string') {
+                try { scheduleData = JSON.parse(scheduleData); } catch (e) {}
+            }
 
-            // query الإدخال المباشر للجدول مع دعم الجدولة
+            let paymentsList = d.paymentsList || d.payments_list || null;
+            if (typeof paymentsList === 'string') {
+                try { paymentsList = JSON.parse(paymentsList); } catch (e) {}
+            }
+
             query = `
                 INSERT INTO debts (
                     id, user_id, title, amount, type, person_name, person_phone, due_date, status, notes, created_at,
@@ -164,8 +189,8 @@ export default async function handler(req, res) {
                 scheduleType,
                 installmentsCount,
                 firstPaymentDate,
-                scheduleData,
-                paymentsList
+                scheduleData ? JSON.stringify(scheduleData) : null,
+                paymentsList ? JSON.stringify(paymentsList) : null
             ];
 
         } else if (['DELETE', 'DELETE_DEBT', 'DELETE_DATA'].includes(action)) {
@@ -192,10 +217,9 @@ export default async function handler(req, res) {
         });
 
     } catch (error) {
-        console.error(`[DATABASE ERROR ON SAVE]:`, error);
+        console.error(`[DATABASE ERROR]:`, error);
         return res.status(500).json({ success: false, error: error.message });
     } finally {
-        // إرجاع الاتصال إلى Pool
         client.release();
     }
 }
