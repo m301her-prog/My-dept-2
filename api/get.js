@@ -1,7 +1,7 @@
 import pg from 'pg';
 
 export default async function handler(request, response) {
-    // 1. إعدادات CORS الكاملة
+    // 1. إعدادات CORS
     response.setHeader('Access-Control-Allow-Credentials', true);
     response.setHeader('Access-Control-Allow-Origin', '*');
     response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -33,7 +33,7 @@ export default async function handler(request, response) {
     try {
         await client.connect();
 
-        // 3. قراءة البيانات المرسلة بجميع الطرق الممكنة (Body, Query, Headers)
+        // 3. قراءة البيانات المرسلة
         const body = typeof request.body === 'string' ? JSON.parse(request.body || '{}') : (request.body || {});
         const queryParams = request.query || {};
 
@@ -50,16 +50,13 @@ export default async function handler(request, response) {
 
         let targetSchema = '';
 
-        // إذا تم إرسال السكيمّا أو اسم الشركة مباشرة
         if (rawSchema) {
             let cleanName = String(rawSchema).replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
             if (cleanName.startsWith('schema_')) {
                 cleanName = cleanName.replace('schema_', '');
             }
             targetSchema = `schema_${cleanName}`;
-        } 
-        // إذا لم يُرسل اسم الشركة وتم إرسال userId فقط، نجلب اسم الشركة من الداتا بيز تلقائياً
-        else if (userId) {
+        } else if (userId) {
             const userRes = await client.query('SELECT company_name FROM public.app_users WHERE id = $1 LIMIT 1', [userId]);
             if (userRes.rows.length > 0 && userRes.rows[0].company_name) {
                 let cleanCompany = userRes.rows[0].company_name.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
@@ -68,7 +65,6 @@ export default async function handler(request, response) {
             }
         }
 
-        // إذا تعذر تحديد السكيمّا نلجأ إلى public كخيار افتراضي لمنع خطأ 400 نهائياً
         if (!targetSchema) {
             targetSchema = 'public';
         }
@@ -80,9 +76,21 @@ export default async function handler(request, response) {
         const debtsQuery = 'SELECT * FROM debts ORDER BY id DESC';
         const result = await client.query(debtsQuery);
 
-        // 6. تحويل مسميات الأعمدة إلى CamelCase للواجهة مع ربط person_phone
+        // 6. تحويل البيانات وإرجاع حقول الأقساط (Schedule & Payments)
         const formattedDebts = result.rows.map(row => {
             const extractedPhone = row.person_phone || row.phone || '';
+            
+            // تحليل تفاصيل الأقساط وسجل الدفعات في حال كانت محفوطة كـ String في الداتا بيز
+            let scheduleData = row.schedule_data;
+            if (typeof scheduleData === 'string') {
+                try { scheduleData = JSON.parse(scheduleData); } catch (e) { scheduleData = []; }
+            }
+
+            let paymentsList = row.payments_list;
+            if (typeof paymentsList === 'string') {
+                try { paymentsList = JSON.parse(paymentsList); } catch (e) { paymentsList = []; }
+            }
+
             return {
                 id: row.id,
                 type: row.type,
@@ -97,7 +105,13 @@ export default async function handler(request, response) {
                 isScheduled: row.is_scheduled || false,
                 scheduleType: row.schedule_type,
                 installmentsCount: row.installments_count || 0,
-                firstPaymentDate: row.first_payment_date
+                firstPaymentDate: row.first_payment_date,
+                
+                // إرجاع تفاصيل الجدول وسجل الدفعات بأكثر من تسمية للتوافق مع الفرونت إند
+                scheduleData: scheduleData || [],
+                schedule_data: scheduleData || [],
+                paymentsList: paymentsList || [],
+                payments_list: paymentsList || []
             };
         });
 
@@ -110,7 +124,6 @@ export default async function handler(request, response) {
     } catch (error) {
         console.error('DATABASE ERROR ON GET:', error);
 
-        // معالجة حالة عدم وجود السكيمّا أو الجدول
         if (error.code === '42P01' || error.code === '3F000') {
             return response.status(200).json({
                 success: true,
