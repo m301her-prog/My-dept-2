@@ -12,12 +12,6 @@ import {
   Users,
   Settings,
   Bell,
-  Calendar,
-  ChevronLeft,
-  DollarSign,
-  Clock,
-  CheckCircle,
-  AlertTriangle,
   Activity,
   Wallet,
   FileText,
@@ -26,24 +20,26 @@ import {
   X,
   Share2,
   PlusCircle,
-  Layers
+  Layers,
+  CheckCircle,
+  DollarSign,
+  Loader2
 } from 'lucide-react';
 
 export default function Home() {
   const {
     t,
     user,
-    isAdmin,
-    debts,
-    statistics,
+    debts = [],
+    statistics = { totalDebts: 0, paidRatio: 0, totalOwedToMe: 0, totalIOwe: 0, paidDebtsCount: 0, pendingDebtsCount: 0 },
     language,
     setLanguage,
     darkMode,
     setDarkMode,
     sendNotification,
     notificationsEnabled,
-    openWhatsApp,
-    updateDebt 
+    updateDebt,
+    loading // حالة التحميل إذا كانت متاحة في Context
   } = useApp();
   
   const navigate = useNavigate();
@@ -53,15 +49,15 @@ export default function Home() {
   const [installmentAmount, setInstallmentAmount] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // State للتحكم في نافذة إضافة دين جديد (زيادة على المبلغ الحالي)
+  // State للتحكم في نافذة إضافة دين جديد
   const [selectedAddDebt, setSelectedAddDebt] = useState(null);
   const [additionalDebtAmount, setAdditionalDebtAmount] = useState('');
   const [isAddDebtModalOpen, setIsAddDebtModalOpen] = useState(false);
 
-  // حساب إجمالي عدد الأقساط المتبقية عبر جميع الديون
-  const totalInstallmentsCount = debts.reduce((acc, curr) => acc + (Number(curr.installmentsCount) || 0), 0);
+  // حساب إجمالي عدد الأقساط المتبقية عبر جميع الديون بأمان
+  const totalInstallmentsCount = (debts || []).reduce((acc, curr) => acc + (Number(curr.installmentsCount) || 0), 0);
 
-  // --- دالة مزامنة البيانات غير المحفوظة عند عودة النت ---
+  // دالة مزامنة البيانات غير المحفوظة عند عودة النت
   const syncOfflineData = async () => {
     const offlineQueue = JSON.parse(localStorage.getItem('pending_offline_debts') || '[]');
     if (offlineQueue.length === 0) return;
@@ -74,7 +70,7 @@ export default function Home() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-tenant-schema': item.tenantSchema || reqHeaderSchema || ''
+            'x-tenant-schema': item.tenantSchema || ''
           },
           body: JSON.stringify(item)
         });
@@ -91,7 +87,6 @@ export default function Home() {
     localStorage.setItem('pending_offline_debts', JSON.stringify(remainingQueue));
   };
 
-  // تفعيل المزامنة عند فتح الصفحة وعند عودة الاتصال بالنت
   useEffect(() => {
     if (navigator.onLine) {
       syncOfflineData();
@@ -108,7 +103,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!notificationsEnabled) return;
+    if (!notificationsEnabled || !debts || debts.length === 0) return;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -131,16 +126,11 @@ export default function Home() {
     });
   }, [debts, t, notificationsEnabled, sendNotification]);
 
-  const recentDebts = debts
+  const recentDebts = [...(debts || [])]
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, 5);
 
-  const upcomingDebts = debts
-    .filter(d => d.status !== 'paid')
-    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
-    .slice(0, 5);
-
-  const formatCurrency = (amount, currency) => {
+  const formatCurrency = (amount = 0, currency) => {
     const locale = language === 'ar' ? 'ar-DZ' : language === 'fr' ? 'fr-FR' : 'en-US';
     return new Intl.NumberFormat(locale, {
       style: 'currency',
@@ -151,20 +141,13 @@ export default function Home() {
   };
 
   const formatDate = (dateString) => {
+    if (!dateString) return '-';
     const locale = language === 'ar' ? 'ar-DZ' : language === 'fr' ? 'fr-FR' : 'en-US';
     return new Date(dateString).toLocaleDateString(locale, {
       month: 'short',
       day: 'numeric',
       year: 'numeric'
     });
-  };
-
-  const getDebtTypeIcon = (type) => {
-    return type === 'owed_to_me' ? (
-      <TrendingUp className="w-5 h-5 text-emerald-500" />
-    ) : (
-      <TrendingDown className="w-5 h-5 text-red-500" />
-    );
   };
 
   const getStatusColor = (debt) => {
@@ -174,15 +157,12 @@ export default function Home() {
     return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400';
   };
 
-  // --- دالة موحدة لتصدير وحفظ PDF متوافقة مع أندرويد والمتصفح ---
   const saveAndExportPDF = async (element, fileName, opt) => {
     if (!Capacitor.isNativePlatform()) {
-      // للمتصفح العادي
       html2pdf().set(opt).from(element).save();
       return;
     }
 
-    // لتطبيق أندرويد عبر Capacitor
     try {
       const pdfBase64 = await html2pdf()
         .set(opt)
@@ -204,11 +184,10 @@ export default function Home() {
         dialogTitle: 'فتح أو مشاركة ملف PDF'
       });
     } catch (error) {
-      console.error('حدث خطأ أثناء حفظ الملف على أندرويد:', error);
+      console.error('حدث خطأ أثناء حفظ الملف:', error);
     }
   };
 
-  // --- 1. تصدير الجدول بالكامل PDF ---
   const handleDownloadTablePDF = async () => {
     const element = document.getElementById('debts-table-container');
     const fileName = `جدول_الديون_${new Date().toISOString().slice(0, 10)}.pdf`;
@@ -223,7 +202,6 @@ export default function Home() {
     await saveAndExportPDF(element, fileName, opt);
   };
 
-  // --- 2. عرض واستخراج شيك الدين الأساسي PDF مع جدول الأقساط والدين الإجمالي ---
   const handlePrintCheckPDF = async (debt) => {
     const history = debt.history || [];
     const installments = history.filter(h => h.type === 'installment' || h.type === 'payment');
@@ -250,13 +228,12 @@ export default function Home() {
     checkElement.innerHTML = `
       <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
         <div style="border: 3px solid #059669; padding: 25px; border-radius: 15px; background: #f0fdf4; max-width: 750px; margin: auto;">
-          
           <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 20px;">
             <div>
               <h2 style="color: #059669; margin: 0; font-size: 22px;">شيك إثبات وسجل دين</h2>
               <span style="font-size: 12px; color: #666;">كشف حساب تفصيلي للشخص</span>
             </div>
-            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #059669;">تاريخ التتقرير: ${formatDate(new Date())}</span>
+            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #059669;">تاريخ التقرير: ${formatDate(new Date())}</span>
           </div>
 
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; background: #fff; padding: 15px; border-radius: 10px; border: 1px solid #e5e7eb;">
@@ -321,14 +298,12 @@ export default function Home() {
     await saveAndExportPDF(checkElement, fileName, opt);
   };
 
-  // --- 3. خصم القسط وخصم عدد الأقساط واستخراج شيك سداد مع جدول كشف الحساب الأقساط كاملًا ---
   const handlePayInstallment = async () => {
     if (!installmentAmount || isNaN(installmentAmount) || installmentAmount <= 0) return;
 
     const amountPaid = parseFloat(installmentAmount);
     const newAmount = Math.max(0, selectedDebt.amount - amountPaid);
     
-    // خصم قسط واحد من عدد الأقساط المسجلة للدين
     const currentInstallmentsCount = Number(selectedDebt.installmentsCount) || 0;
     const newInstallmentsCount = Math.max(0, currentInstallmentsCount - 1);
 
@@ -344,7 +319,6 @@ export default function Home() {
 
     const updatedHistory = [...(selectedDebt.history || []), newHistoryItem];
 
-    // تحديث الحالة والأقساط في AppContext / Database
     if (updateDebt) {
       updateDebt(selectedDebt.id, {
         ...selectedDebt,
@@ -369,7 +343,6 @@ export default function Home() {
       </tr>
     `).join('');
 
-    // استخراج شيك سداد القسط PDF يتضمن جدول بكافة الأقساط
     const receiptElement = document.createElement('div');
     receiptElement.innerHTML = `
       <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
@@ -435,13 +408,11 @@ export default function Home() {
 
     await saveAndExportPDF(receiptElement, fileName, opt);
 
-    // إعادة ضبط الحالة وإغلاق Modal
     setIsModalOpen(false);
     setInstallmentAmount('');
     setSelectedDebt(null);
   };
 
-  // --- 4. دالة إضافة دين جديد وزيادته على المبلغ الموجود وتحديث السجل ---
   const handleAddNewDebt = () => {
     if (!additionalDebtAmount || isNaN(additionalDebtAmount) || additionalDebtAmount <= 0) return;
 
@@ -472,6 +443,16 @@ export default function Home() {
     setSelectedAddDebt(null);
   };
 
+  // شاشة تحميل مؤقتة عند الفتح الأول حتى تجهز البيانات
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col justify-center items-center">
+        <Loader2 className="w-10 h-10 text-emerald-500 animate-spin mb-4" />
+        <p className="text-gray-600 dark:text-gray-300 font-medium">جاري تحميل البيانات...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pb-24">
       {/* Header */}
@@ -480,7 +461,7 @@ export default function Home() {
           <div>
             <p className="text-emerald-100 text-sm">{t('welcome')}</p>
             <h1 className="text-2xl font-bold">
-              {user?.name || user?.email?.split('@')[0]}
+              {user?.name || user?.email?.split('@')[0] || 'مرحباً بك'}
             </h1>
             <p className="text-emerald-100 text-sm mt-1">
               {language === 'ar' ? 'كيف حالك اليوم؟' : ''}
@@ -521,11 +502,11 @@ export default function Home() {
         <div className="flex items-center justify-between text-sm">
           <div className="flex items-center gap-2">
             <Wallet className="w-4 h-4" />
-            <span>{statistics.totalDebts} {t('debts')}</span>
+            <span>{statistics?.totalDebts || 0} {t('debts')}</span>
           </div>
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4" />
-            <span>{statistics.paidRatio}% {t('paid')}</span>
+            <span>{statistics?.paidRatio || 0}% {t('paid')}</span>
           </div>
         </div>
       </header>
@@ -541,7 +522,7 @@ export default function Home() {
               <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{t('owedToMe')}</span>
             </div>
             <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-              {formatCurrency(statistics.totalOwedToMe, 'DZD')}
+              {formatCurrency(statistics?.totalOwedToMe || 0, 'DZD')}
             </p>
           </div>
 
@@ -553,11 +534,10 @@ export default function Home() {
               <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">{t('iOwe')}</span>
             </div>
             <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-              {formatCurrency(statistics.totalIOwe, 'DZD')}
+              {formatCurrency(statistics?.totalIOwe || 0, 'DZD')}
             </p>
           </div>
 
-          {/* هيدر عرض إجمالي عدد الأقساط */}
           <div className="col-span-2 bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl border-l-4 border-blue-500 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
@@ -576,28 +556,28 @@ export default function Home() {
                 <CheckCircle className="w-5 h-5 text-emerald-500" />
                 <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">{t('statistics')}</span>
               </div>
-              <span className="text-2xl font-bold text-gray-900 dark:text-white">{statistics.paidRatio}%</span>
+              <span className="text-2xl font-bold text-gray-900 dark:text-white">{statistics?.paidRatio || 0}%</span>
             </div>
             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
               <div
                 className="bg-gradient-to-r from-emerald-400 to-teal-500 h-3 rounded-full transition-all duration-500"
-                style={{ width: `${statistics.paidRatio}%` }}
+                style={{ width: `${statistics?.paidRatio || 0}%` }}
               />
             </div>
             <div className="flex justify-between mt-3 text-sm">
               <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                {t('paidDebts')}: {statistics.paidDebtsCount}
+                {t('paidDebts')}: {statistics?.paidDebtsCount || 0}
               </span>
               <span className="text-yellow-600 dark:text-yellow-400 font-medium">
-                {t('pendingDebts')}: {statistics.pendingDebtsCount}
+                {t('pendingDebts')}: {statistics?.pendingDebtsCount || 0}
               </span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Recent Activity Table with PDF Exports & Actions */}
-      {recentDebts.length > 0 && (
+      {/* Recent Activity Table */}
+      {recentDebts.length > 0 ? (
         <div className="px-4 mb-6">
           <div className="flex items-center justify-between mb-3">
             <h2 className="flex items-center gap-2 text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
@@ -605,7 +585,6 @@ export default function Home() {
               {t('recentActivity')}
             </h2>
             
-            {/* زرار تحميل الجدول بالكامل PDF مع إشارة المشاركة */}
             <button
               onClick={handleDownloadTablePDF}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg shadow transition font-medium"
@@ -645,7 +624,6 @@ export default function Home() {
                         </span>
                       </td>
                       <td className="p-3 flex items-center gap-2">
-                        {/* 1. زرار عرض ومشاركة الشيك PDF */}
                         <button
                           onClick={() => handlePrintCheckPDF(debt)}
                           title="عرض ومشاركة الشيك PDF"
@@ -656,7 +634,6 @@ export default function Home() {
                           <span className="text-[10px] font-bold border border-blue-400 px-0.5 rounded">PDF</span>
                         </button>
 
-                        {/* 2. زرار إضافة قسط وخصمه */}
                         <button
                           onClick={() => {
                             setSelectedDebt(debt);
@@ -669,7 +646,6 @@ export default function Home() {
                           <span>قسط</span>
                         </button>
 
-                        {/* 3. زرار إضافة دين جديد (زيادة على الدين الحالي) */}
                         <button
                           onClick={() => {
                             setSelectedAddDebt(debt);
@@ -688,6 +664,10 @@ export default function Home() {
               </table>
             </div>
           </div>
+        </div>
+      ) : (
+        <div className="px-4 mb-6 text-center py-8 bg-white dark:bg-gray-800 rounded-2xl shadow-md">
+          <p className="text-gray-500 dark:text-gray-400 text-sm">لا توجد ديون أو مسجلات سابقة حتى الآن.</p>
         </div>
       )}
 
@@ -740,7 +720,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* Modal إضافة دين جديد (زيادة على الدين الحالي) */}
+      {/* Modal إضافة دين جديد */}
       {isAddDebtModalOpen && selectedAddDebt && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
@@ -787,7 +767,7 @@ export default function Home() {
       )}
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-2 shadow-lg">
+      <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-2 shadow-lg z-40">
         <div className="flex items-center justify-around max-w-md mx-auto">
           <button onClick={() => navigate('/')} className="flex flex-col items-center py-2 text-emerald-500">
             <DollarSign className="w-6 h-6" />
