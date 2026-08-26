@@ -82,13 +82,16 @@ export default async function handler(req, res) {
 
     const createdAt = new Date().toISOString();
 
-    // 💡 3. تنظيف اسم الشركة وإنشاء اسم Schema مخصص ببادئة schema_
-    const sanitizedCompany = finalCompanyName.toString().trim().replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
-    
-    // في حال كُتب اسم الشركة بأحرف عربية أو رموز غير لاتينية فقط، نعتمد id كبديل لتفادي الأسماء الفارغة
-    const schemaName = sanitizedCompany 
-      ? `schema_${sanitizedCompany}` 
-      : `schema_user_${userId.replace('usr_', '')}`;
+    // 💡 3. إجبار إنشاء Schema واحدة فقط باسم الشركة (يدعم الأحرف العربية والإنجليزية بشكل موحد)
+    const rawCompany = finalCompanyName.toString().trim();
+    let sanitizedCompany = rawCompany.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+
+    // في حال كان اسم الشركة بالعربي أو رموز، يتم تحويله لترميز Hex نقي لمنع إنشاء اسكيما ثانية باسم user_id
+    if (!sanitizedCompany) {
+      sanitizedCompany = Buffer.from(rawCompany).toString('hex');
+    }
+
+    const schemaName = `schema_${sanitizedCompany}`;
 
     // 💡 4. إنشاء السكيمّا وتحديد المسار لبناء جدول الديون داخله
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}";`);
