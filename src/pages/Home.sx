@@ -202,6 +202,39 @@ export default function Home() {
     await saveAndExportPDF(element, fileName, opt);
   };
 
+  // دالة تفعيل زرار مشاركة بيانات العميل كـ نص عبر Capacitor Share أو Web Share
+  const handleShareDebtDetails = async (debt) => {
+    const typeText = debt.type === 'owed_to_me' ? 'مستحق لي' : 'مستحق علي';
+    const statusText = debt.status === 'paid' ? 'تم السداد' : 'متبقي';
+    
+    const shareText = `تفاصيل الدين:\n` +
+      `الاسم: ${debt.personName}\n` +
+      `المبلغ: ${formatCurrency(debt.amount, debt.currency)}\n` +
+      `نوع الدين: ${typeText}\n` +
+      `تاريخ الاستحقاق: ${formatDate(debt.dueDate)}\n` +
+      `الحالة: ${statusText}`;
+
+    try {
+      if (Capacitor.isNativePlatform()) {
+        await Share.share({
+          title: `دين ${debt.personName}`,
+          text: shareText,
+          dialogTitle: 'مشاركة تفاصيل الدين'
+        });
+      } else if (navigator.share) {
+        await navigator.share({
+          title: `دين ${debt.personName}`,
+          text: shareText
+        });
+      } else {
+        await navigator.clipboard.writeText(shareText);
+        alert('تم نسخ تفاصيل الدين إلى الحافظة');
+      }
+    } catch (error) {
+      console.error('خطأ أثناء المشاركة:', error);
+    }
+  };
+
   const handlePrintCheckPDF = async (debt) => {
     const history = debt.history || [];
     const installments = history.filter(h => h.type === 'installment' || h.type === 'payment');
@@ -630,8 +663,16 @@ export default function Home() {
                           className="flex items-center gap-1 p-1.5 bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 rounded-lg hover:bg-blue-100 transition text-xs font-medium"
                         >
                           <FileText className="w-4 h-4" />
-                          <Share2 className="w-3.5 h-3.5" />
                           <span className="text-[10px] font-bold border border-blue-400 px-0.5 rounded">PDF</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleShareDebtDetails(debt)}
+                          title="مشاركة تفاصيل العميل"
+                          className="flex items-center gap-1 p-1.5 bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400 rounded-lg hover:bg-amber-100 transition text-xs font-medium"
+                        >
+                          <Share2 className="w-4 h-4" />
+                          <span>مشاركة</span>
                         </button>
 
                         <button
@@ -778,13 +819,13 @@ export default function Home() {
             <span className="text-xs mt-1">{t('debts')}</span>
           </button>
           <button onClick={() => navigate('/debts/add')} className="relative -mt-8">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-xl">
-              <Plus className="w-8 h-8 text-white" />
+            <div className="w-14 h-14 bg-emerald-500 rounded-full flex items-center justify-center text-white shadow-lg hover:bg-emerald-600 transition">
+              <Plus className="w-8 h-8" />
             </div>
           </button>
-          <button onClick={() => navigate('/debts')} className="flex flex-col items-center py-2 text-gray-400">
+          <button onClick={() => navigate('/clients')} className="flex flex-col items-center py-2 text-gray-400">
             <Users className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('people')}</span>
+            <span className="text-xs mt-1">{t('clients')}</span>
           </button>
           <button onClick={() => navigate('/settings')} className="flex flex-col items-center py-2 text-gray-400">
             <Settings className="w-6 h-6" />
