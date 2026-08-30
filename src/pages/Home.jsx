@@ -732,23 +732,23 @@ export default function Home() {
             </button>
 
             <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
-              إضافة دين جديد للعميل
+              إضافة دين جديد على الحساب
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
               العميل: <span className="font-semibold text-gray-800 dark:text-gray-200">{selectedAddDebt.personName}</span>
               <br />
-              الدين الحالي: <span className="font-bold text-emerald-600">{formatCurrency(selectedAddDebt.amount, selectedAddDebt.currency)}</span>
+              إجمالي الدين الحالي: <span className="font-bold text-emerald-600">{formatCurrency(selectedAddDebt.amount, selectedAddDebt.currency)}</span>
             </p>
 
             <div className="mb-4">
               <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                مبلغ الدين الإضافي:
+                المبلغ الإضافي المراد زيادته:
               </label>
               <input
                 type="number"
                 value={additionalDebtAmount}
                 onChange={(e) => setAdditionalDebtAmount(e.target.value)}
-                placeholder="أدخل مبلغ الدين الجديد..."
+                placeholder="أدخل مبلغ الدين الإضافي..."
                 className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
               />
             </div>
@@ -758,40 +758,13 @@ export default function Home() {
                 onClick={handleAddNewDebt}
                 className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-xl font-bold shadow-lg transition flex items-center justify-center gap-2"
               >
-                <PlusCircle className="w-5 h-5" />
-                <span>إضافة للمبلغ الحالي</span>
+                <span>تأكيد إضافة الدين</span>
+                <PlusCircle className="w-4 h-4" />
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-2 shadow-lg z-40">
-        <div className="flex items-center justify-around max-w-md mx-auto">
-          <button onClick={() => navigate('/')} className="flex flex-col items-center py-2 text-emerald-500">
-            <DollarSign className="w-6 h-6" />
-            <span className="text-xs mt-1 font-medium">{t('home')}</span>
-          </button>
-          <button onClick={() => navigate('/debts')} className="flex flex-col items-center py-2 text-gray-400">
-            <Bell className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('debts')}</span>
-          </button>
-          <button onClick={() => navigate('/debts/add')} className="relative -mt-8">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-xl">
-              <Plus className="w-8 h-8 text-white" />
-            </div>
-          </button>
-          <button onClick={() => navigate('/debts')} className="flex flex-col items-center py-2 text-gray-400">
-            <Users className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('people')}</span>
-          </button>
-          <button onClick={() => navigate('/settings')} className="flex flex-col items-center py-2 text-gray-400">
-            <Settings className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('settings')}</span>
-          </button>
-        </div>
-      </nav>
     </div>
   );
 }
