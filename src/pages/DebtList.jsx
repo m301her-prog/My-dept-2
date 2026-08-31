@@ -33,15 +33,51 @@ export default function DebtList() {
   const [deletingId, setDeletingId] = useState(null);
   const [expandedScheduleId, setExpandedScheduleId] = useState(null);
 
-  // دالة مساعدة محصنة لحذف الدين بشكل فردي من التخزين المحلي للأندرويد والـ Bridge
+  // دالة الحذف المحلي المتقدمة (تشمل سجل المحذوفات للتأمين ضد المزامنة واستخلاص مفاتيح المستخدم)
   const deleteAndroidDebtLocally = async (debtIdToDelete, personName = '') => {
     try {
-      // 1. مسح الدين من localStorage المباشر
-      const storedDebts = JSON.parse(localStorage.getItem('debts') || '[]');
-      const updated = storedDebts.filter(item => String(item.id ?? item._id ?? item.debt_id ?? item.debtId) !== String(debtIdToDelete));
-      localStorage.setItem('debts', JSON.stringify(updated));
+      const targetUserId = currentUser?.id || currentUser?._id || 'guest';
+      const userDebtsKey = `user_${targetUserId}_debts`;
+      const deletedKeysKey = `user_${targetUserId}_deleted_ids`;
 
-      // 2. الاستدعاء الآمن للـ Android Bridge (سواء كان JavaScriptInterface أو Capacitor/Cordova Plugin)
+      // 1. إضافة المعرّف لسجل المحذوفات المحلي لتجنب استرجاعه عند المزامنة السحابية
+      const existingDeleted = JSON.parse(localStorage.getItem(deletedKeysKey) || '[]');
+      if (!existingDeleted.includes(debtIdToDelete)) {
+        existingDeleted.push(debtIdToDelete);
+        localStorage.setItem(deletedKeysKey, JSON.stringify(existingDeleted));
+      }
+
+      // 2. فلترة قائمة مفتاح المستخدم الخاص
+      const userStoredDebts = JSON.parse(localStorage.getItem(userDebtsKey) || '[]');
+      const updatedUserDebts = userStoredDebts.filter(
+        item => String(item.id ?? item._id ?? item.debt_id ?? item.debtId) !== String(debtIdToDelete)
+      );
+      localStorage.setItem(userDebtsKey, JSON.stringify(updatedUserDebts));
+
+      // 3. فلترة القائمة العامة `debts` كدعم إضافي
+      const generalStoredDebts = JSON.parse(localStorage.getItem('debts') || '[]');
+      const updatedGeneralDebts = generalStoredDebts.filter(
+        item => String(item.id ?? item._id ?? item.debt_id ?? item.debtId) !== String(debtIdToDelete)
+      );
+      localStorage.setItem('debts', JSON.stringify(updatedGeneralDebts));
+
+      // 4. تنظيف شامل لجميع مفاتيح localstorage التي تنتهي بـ _debts
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.endsWith('_debts')) {
+          try {
+            const itemData = JSON.parse(localStorage.getItem(key) || '[]');
+            if (Array.isArray(itemData) && itemData.some(d => String(d.id ?? d._id ?? d.debt_id ?? d.debtId) === String(debtIdToDelete))) {
+              const cleaned = itemData.filter(d => String(d.id ?? d._id ?? d.debt_id ?? d.debtId) !== String(debtIdToDelete));
+              localStorage.setItem(key, JSON.stringify(cleaned));
+            }
+          } catch (e) {
+            // تجاهل المفاتيح التي لا تحوي نص JSON صالح
+          }
+        }
+      }
+
+      // 5. الاستدعاء الآمن لجسور الأندرويد (Bridge / Capacitor)
       if (window.AndroidBridge) {
         if (typeof window.AndroidBridge.deleteDebtLocally === 'function') {
           await window.AndroidBridge.deleteDebtLocally(String(debtIdToDelete), personName);
@@ -50,7 +86,6 @@ export default function DebtList() {
         }
       }
 
-      // 3. مسح الدين من Web Storage في حال كان الأندرويد يخزن البيانات عبر window.Capacitor
       if (window.Capacitor?.Plugins?.Preferences) {
         const { value } = await window.Capacitor.Plugins.Preferences.get({ key: 'debts' });
         if (value) {
@@ -64,7 +99,7 @@ export default function DebtList() {
     }
   };
 
-  // دالة الحذف الفردي للدين (تدمج الحذف السحابي وحذف الأندرويد المحلي)
+  // دالة الحذف الفردي للدين (دمج الحذف المحلي والسحابي)
   const handleDeleteDebt = async (e, debt) => {
     e.preventDefault();
     e.stopPropagation();
@@ -94,7 +129,10 @@ export default function DebtList() {
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // 2. طلب الحذف من السحابة وقاعدة البيانات
+        // 2. التنفيذ الفوري للحذف المحلي لتأكيد المسح محلياً
+        await deleteAndroidDebtLocally(debtIdToDelete, personName);
+
+        // 3. طلب الحذف من السحابة وقاعدة البيانات
         const response = await fetch('https://my-dept-2.vercel.app/api/Delete', {
           method: 'POST',
           headers: {
@@ -117,14 +155,16 @@ export default function DebtList() {
           throw new Error(resData.error || 'Failed to delete on server');
         }
 
-        // 3. الحذف الفردي من تخزين وقاعدة بيانات الأندرويد المحلية
-        await deleteAndroidDebtLocally(debtIdToDelete, personName);
-
       } catch (error) {
         console.error('Error deleting debt on server:', error);
         // إعادة الحالة السابقة عند الفشل
         if (setDebts) setDebts(previousDebts);
+        
+        // إعادة قائمة البيانات للمستخدم في localStorage
+        const targetUserId = currentUser?.id || currentUser?._id || 'guest';
+        localStorage.setItem(`user_${targetUserId}_debts`, JSON.stringify(previousDebts));
         localStorage.setItem('debts', JSON.stringify(previousDebts));
+        
         alert(language === 'ar' ? 'حدث خطأ أثناء الحذف، يرجى الاتصال بالإنترنت' : 'Failed to delete debt');
       } finally {
         setDeletingId(null);
