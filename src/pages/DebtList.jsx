@@ -120,7 +120,7 @@ export default function DebtList() {
           throw new Error(resData.error || 'Failed to clear all debts on server');
         }
 
-        // 2. مسح البيانات محلياً من التخزين وقاعدة الأندرويد
+        // 2. مسح البيانات محلياً من التخزين وقاعدة الأندرويد عبر الدالة المساندة الأعلى
         await clearAndroidLocalStorage(keysToDelete);
 
         // 3. تحديث الـ React State
@@ -278,7 +278,7 @@ export default function DebtList() {
           throw new Error(resData.error || 'Failed to delete on server');
         }
 
-        // 3. الحذف المترابط من تخزين وقاعدة بيانات الأندرويد
+        // 3. الحذف المترابط من تخزين وقاعدة بيانات الأندرويد عبر الدالة المحصنة
         await clearAndroidLocalStorage(['debts'], debtIdToDelete, personName);
 
       } catch (error) {
