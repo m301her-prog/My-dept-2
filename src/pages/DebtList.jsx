@@ -35,7 +35,58 @@ export default function DebtList() {
   const [isClearingAll, setIsClearingAll] = useState(false);
   const [expandedScheduleId, setExpandedScheduleId] = useState(null);
 
-  // دالة مسح كل الديون المربوطة بالسحابة، التخزين المحلي، وقاعدة بيانات التطبيق بضغطة واحدة
+  // دالة مساعدة محصنة لحذف البيانات من التخزين المحلي للأندرويد والـ Bridge
+  const clearAndroidLocalStorage = async (keysToDelete = ['debts', 'pending_offline_debts'], debtIdToDelete = null, personName = '') => {
+    try {
+      // 1. مسح البيانات من localStorage المباشر
+      if (debtIdToDelete) {
+        const storedDebts = JSON.parse(localStorage.getItem('debts') || '[]');
+        const updated = storedDebts.filter(item => String(item.id ?? item._id ?? item.debt_id ?? item.debtId) !== String(debtIdToDelete));
+        localStorage.setItem('debts', JSON.stringify(updated));
+      } else {
+        keysToDelete.forEach(key => {
+          localStorage.removeItem(key);
+        });
+      }
+
+      // 2. الاستدعاء الآمن للـ Android Bridge (سواء كان JavaScriptInterface أو Capacitor/Cordova Plugin)
+      if (window.AndroidBridge) {
+        if (debtIdToDelete) {
+          if (typeof window.AndroidBridge.deleteDebtLocally === 'function') {
+            await window.AndroidBridge.deleteDebtLocally(String(debtIdToDelete), personName);
+          } else if (typeof window.AndroidBridge.deleteDebtFromLocalDb === 'function') {
+            await window.AndroidBridge.deleteDebtFromLocalDb(String(debtIdToDelete), personName);
+          }
+        } else {
+          if (typeof window.AndroidBridge.clearAllDebtsLocally === 'function') {
+            await window.AndroidBridge.clearAllDebtsLocally();
+          } else if (typeof window.AndroidBridge.deleteAllDebtsFromLocalDb === 'function') {
+            await window.AndroidBridge.deleteAllDebtsFromLocalDb();
+          }
+        }
+      }
+
+      // 3. مسح كاش الـ Web Storage في حال كان الأندرويد يخزن البيانات عبر window.Capacitor
+      if (window.Capacitor?.Plugins?.Preferences) {
+        if (debtIdToDelete) {
+          const { value } = await window.Capacitor.Plugins.Preferences.get({ key: 'debts' });
+          if (value) {
+            const parsed = JSON.parse(value);
+            const filtered = parsed.filter(item => String(item.id ?? item._id ?? item.debt_id ?? item.debtId) !== String(debtIdToDelete));
+            await window.Capacitor.Plugins.Preferences.set({ key: 'debts', value: JSON.stringify(filtered) });
+          }
+        } else {
+          for (const key of keysToDelete) {
+            await window.Capacitor.Plugins.Preferences.remove({ key });
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error clearing local Android storage:', err);
+    }
+  };
+
+  // دالة مسح كل الديون المربوطة بالسحابة، التخزين المحلي، وقاعدة بيانات التطبيق
   const handleClearSpecificData = async (keysToDelete = ['debts', 'pending_offline_debts']) => {
     if (isClearingAll) return;
 
@@ -69,20 +120,17 @@ export default function DebtList() {
           throw new Error(resData.error || 'Failed to clear all debts on server');
         }
 
-        // 2. مسح البيانات من LocalStorage والـ State
-        keysToDelete.forEach(key => localStorage.removeItem(key));
+        // 2. مسح البيانات محلياً من التخزين وقاعدة الأندرويد
+        await clearAndroidLocalStorage(keysToDelete);
+
+        // 3. تحديث الـ React State
         if (setDebts) setDebts([]);
 
-        // 3. التزامن ومسح البيانات محلياً من تطبيق الأندرويد (Room / SQLite)
-        if (window.AndroidBridge) {
-          if (typeof window.AndroidBridge.clearAllDebtsLocally === 'function') {
-            window.AndroidBridge.clearAllDebtsLocally();
-          } else if (typeof window.AndroidBridge.deleteAllDebtsFromLocalDb === 'function') {
-            window.AndroidBridge.deleteAllDebtsFromLocalDb();
-          }
-        }
+        // 4. تأخير بسيط قبل إعادة التحميل للتأكد من إتمام الحذف
+        setTimeout(() => {
+          window.location.reload();
+        }, 150);
 
-        window.location.reload();
       } catch (error) {
         console.error('Error clearing specific data:', error);
         alert(language === 'ar' ? 'حدث خطأ أثناء مسح البيانات، يرجى التأكد من اتصال الاتصال بالإنترنت' : 'Failed to clear all debts history');
@@ -92,7 +140,7 @@ export default function DebtList() {
     }
   };
 
-  // دالة جلب رقم الهاتف مع التأكيد على حقل person_phone المتواجد في قاعدة البيانات
+  // دالة جلب رقم الهاتف
   const getPhoneNumber = (debt) => {
     return debt.person_phone || debt.personPhone || debt.phone || debt.person_Phone || debt.whatsapp || debt.whatsappPhone || '';
   };
@@ -177,7 +225,7 @@ export default function DebtList() {
     openWhatsApp(phoneNumber, message);
   };
 
-  // دالة الحذف الشاملة المتوافقة والمتزامنة مع قاعدة البيانات والسحابة والذاكرة المحلية
+  // دالة الحذف الفردي للدين
   const handleDeleteDebt = async (e, debt) => {
     e.preventDefault();
     e.stopPropagation();
@@ -195,29 +243,19 @@ export default function DebtList() {
       setDeletingId(debtIdToDelete);
       const previousDebts = [...(debts || [])];
 
-      // دالة تحديث التخزين المحلي والـ State لضمان عدم استعادة العناصر
-      const updateLocalState = (updatedList) => {
-        if (setDebts) setDebts(updatedList);
-        try {
-          localStorage.setItem('debts', JSON.stringify(updatedList));
-        } catch (err) {
-          console.error('Error updating localStorage:', err);
-        }
-      };
-
-      // 1. التحديث اللحظي للواجهة والذاكرة المحلية
+      // 1. التحديث اللحظي للـ React State
       const updatedDebts = previousDebts.filter(item => {
         const itemId = String(item.id ?? item._id ?? item.debt_id ?? item.debtId ?? '').trim();
         return itemId !== debtIdToDelete;
       });
-      updateLocalState(updatedDebts);
+      if (setDebts) setDebts(updatedDebts);
 
       try {
         const personName = debt.personName || debt.person_name || '';
         const companyName = debt.companyName || debt.company_name || currentUser?.companyName || currentUser?.company_name || '';
         const userId = currentUser?.id || currentUser?._id || 'guest';
 
-        // 2. طلب الحذف السحابي وقاعدة البيانات
+        // 2. طلب الحذف من السحابة وقاعدة البيانات
         const response = await fetch('https://my-dept-2.vercel.app/api/Delete', {
           method: 'POST',
           headers: {
@@ -240,19 +278,14 @@ export default function DebtList() {
           throw new Error(resData.error || 'Failed to delete on server');
         }
 
-        // 3. التزامن مع قاعدة بيانات التطبيق على الأندرويد (Room / SQLite)
-        if (window.AndroidBridge) {
-          if (typeof window.AndroidBridge.deleteDebtLocally === 'function') {
-            window.AndroidBridge.deleteDebtLocally(debtIdToDelete, personName);
-          } else if (typeof window.AndroidBridge.deleteDebtFromLocalDb === 'function') {
-            window.AndroidBridge.deleteDebtFromLocalDb(debtIdToDelete, personName);
-          }
-        }
+        // 3. الحذف المترابط من تخزين وقاعدة بيانات الأندرويد
+        await clearAndroidLocalStorage(['debts'], debtIdToDelete, personName);
 
       } catch (error) {
         console.error('Error deleting debt on server:', error);
         // إعادة الحالة السابقة عند الفشل
-        updateLocalState(previousDebts);
+        if (setDebts) setDebts(previousDebts);
+        localStorage.setItem('debts', JSON.stringify(previousDebts));
         alert(language === 'ar' ? 'حدث خطأ أثناء الحذف، يرجى الاتصال بالإنترنت' : 'Failed to delete debt');
       } finally {
         setDeletingId(null);
@@ -260,7 +293,7 @@ export default function DebtList() {
     }
   };
 
-  // دالة مساعدة محصنة لاستخراج بيانات الأقساط بغض النظر عن طريقة تحويل البيانات
+  // دالة مساعدة محصنة لاستخراج بيانات الأقساط
   const parseScheduleData = (scheduleData) => {
     if (!scheduleData) return [];
     if (Array.isArray(scheduleData)) return scheduleData;
@@ -382,7 +415,7 @@ export default function DebtList() {
           </div>
         </div>
 
-        {/* زر مسح سجل الديون كاملاً من السحابة وقاعدة البيانات والتطبيق */}
+        {/* زر مسح سجل الديون بالكامل */}
         <button
           type="button"
           disabled={isClearingAll}
@@ -449,7 +482,6 @@ export default function DebtList() {
                             {personName}
                           </h3>
                           
-                          {/* عرض رقم الهاتف إن وجد */}
                           {phoneNumber ? (
                             <p className="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-1 mt-0.5" dir="ltr">
                               <Phone className="w-3 h-3 text-emerald-500 inline shrink-0" />
@@ -509,7 +541,6 @@ export default function DebtList() {
                             </a>
                           )}
                           
-                          {/* زر الحذف الفردي لـ الدين الخاص بالعميل */}
                           <button
                             type="button"
                             disabled={isDeleting}
@@ -522,7 +553,7 @@ export default function DebtList() {
                         </div>
                       </div>
 
-                      {/* عرض الأقساط والجدولة إن وجدت */}
+                      {/* Schedule Display */}
                       {isScheduled && scheduleItems.length > 0 && (
                         <div className="mt-2 bg-blue-50/50 dark:bg-blue-950/20 rounded-xl p-3 border border-blue-100 dark:border-blue-900/30">
                           <button
@@ -557,7 +588,7 @@ export default function DebtList() {
                         </div>
                       )}
 
-                      {/* زر الواتساب (يظهر عند توفر رقم الهاتف) */}
+                      {/* WhatsApp Button */}
                       {phoneNumber && (
                         <button
                           type="button"
@@ -571,7 +602,6 @@ export default function DebtList() {
                     </div>
                   </div>
 
-                  {/* Notes Preview */}
                   {debt.notes && (
                     <p className="mt-3 text-sm text-gray-500 dark:text-gray-400 line-clamp-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2">
                       {debt.notes}
