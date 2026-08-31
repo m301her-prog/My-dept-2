@@ -242,12 +242,13 @@ export function AppProvider({ children }) {
     }
   };
 
-  // الحذف المحلي
+  // الحذف المحلي المعدل للتوافق مع neonService.js الأصلي
   const handleDeleteDebt = async (id) => {
     setLoading(true);
     try {
-      await deleteDebt(user.id, id);
-      setDebts(prev => prev.filter(d => d.id !== id));
+      // تمرير المعرف أولاً، ثم اسم الشركة، ثم معرف المستخدم ليتوافق مع توقيع الخدمة
+      await deleteDebt(id, user?.companyName || '', user?.id || 'guest');
+      setDebts(prev => prev.filter(d => d.id !== id && d._id !== id));
       showNotification(t('debtDeleted'), 'success');
     } catch (error) {
       showNotification(error.message, 'error');
