@@ -158,7 +158,6 @@ export default function Home() {
   };
 
   const saveAndExportPDF = async (element, fileName, opt) => {
-    // التأكد من إضافة العنصر مؤقتاً للـ DOM لضمان قيام html2canvas برسمه على الأندرويد
     let isTempAppended = false;
     if (!document.body.contains(element)) {
       element.style.position = 'absolute';
@@ -167,7 +166,7 @@ export default function Home() {
       element.style.width = '750px';
       document.body.appendChild(element);
       isTempAppended = true;
-      await new Promise(resolve => setTimeout(resolve, 150));
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
 
     try {
@@ -186,7 +185,7 @@ export default function Home() {
       const savedFile = await Filesystem.writeFile({
         path: fileName,
         data: base64Data,
-        directory: Directory.Cache // استخدام Cache بدلاً من Documents لتفادي مشكلات الصلاحيات في Android 11+
+        directory: Directory.Cache
       });
 
       await Share.share({
@@ -205,18 +204,59 @@ export default function Home() {
   };
 
   const handleDownloadTablePDF = async () => {
-    const element = document.getElementById('debts-table-container');
-    if (!element) return;
+    // إنشاء نموذج صريح للجدول من البيانات مباشرة لتفادي مشاكل الأبعاد والصفحة البيضاء
+    const printContainer = document.createElement('div');
+    printContainer.style.padding = '20px';
+    printContainer.style.background = '#ffffff';
+    printContainer.style.color = '#000000';
+    printContainer.style.direction = 'rtl';
+    printContainer.style.fontFamily = 'sans-serif';
+
+    const rowsHtml = recentDebts.map((debt, index) => `
+      <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
+        <td style="padding: 10px; text-align: center;">${index + 1}</td>
+        <td style="padding: 10px; font-weight: bold;">${debt.personName}</td>
+        <td style="padding: 10px; text-align: center; font-weight: bold; color: ${debt.type === 'owed_to_me' ? '#059669' : '#dc2626'};">
+          ${formatCurrency(debt.amount, debt.currency)}
+        </td>
+        <td style="padding: 10px; text-align: center;">${debt.installmentsCount || 0}</td>
+        <td style="padding: 10px; text-align: center;">${debt.status === 'paid' ? 'تم السداد' : 'قيد الانتظار'}</td>
+        <td style="padding: 10px; text-align: center;">${formatDate(debt.dueDate)}</td>
+      </tr>
+    `).join('');
+
+    printContainer.innerHTML = `
+      <div style="border: 2px solid #10b981; border-radius: 10px; padding: 15px;">
+        <h2 style="text-align: center; color: #10b981; margin-bottom: 5px;">جدول النشاط الأخير والديون</h2>
+        <p style="text-align: center; color: #666; font-size: 12px; margin-bottom: 15px;">تاريخ التصدير: ${formatDate(new Date())}</p>
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="background-color: #10b981; color: white; font-size: 13px;">
+              <th style="padding: 8px;">#</th>
+              <th style="padding: 8px; text-align: right;">الاسم</th>
+              <th style="padding: 8px;">المبلغ</th>
+              <th style="padding: 8px;">الأقساط</th>
+              <th style="padding: 8px;">الحالة</th>
+              <th style="padding: 8px;">تاريخ الاستحقاق</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    `;
+
     const fileName = `جدول_الديون_${new Date().toISOString().slice(0, 10)}.pdf`;
     const opt = {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
+      html2canvas: { scale: 2, useCORS: true, logging: false },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
     };
 
-    await saveAndExportPDF(element, fileName, opt);
+    await saveAndExportPDF(printContainer, fileName, opt);
   };
 
   // دالة تفعيل زرار مشاركة بيانات العميل كـ نص عبر Capacitor Share أو Web Share
