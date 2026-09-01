@@ -158,12 +158,24 @@ export default function Home() {
   };
 
   const saveAndExportPDF = async (element, fileName, opt) => {
-    if (!Capacitor.isNativePlatform()) {
-      html2pdf().set(opt).from(element).save();
-      return;
+    // التأكد من إضافة العنصر مؤقتاً للـ DOM لضمان قيام html2canvas برسمه على الأندرويد
+    let isTempAppended = false;
+    if (!document.body.contains(element)) {
+      element.style.position = 'absolute';
+      element.style.left = '-9999px';
+      element.style.top = '0';
+      element.style.width = '750px';
+      document.body.appendChild(element);
+      isTempAppended = true;
+      await new Promise(resolve => setTimeout(resolve, 150));
     }
 
     try {
+      if (!Capacitor.isNativePlatform()) {
+        await html2pdf().set(opt).from(element).save();
+        return;
+      }
+
       const pdfBase64 = await html2pdf()
         .set(opt)
         .from(element)
@@ -174,7 +186,7 @@ export default function Home() {
       const savedFile = await Filesystem.writeFile({
         path: fileName,
         data: base64Data,
-        directory: Directory.Documents
+        directory: Directory.Cache // استخدام Cache بدلاً من Documents لتفادي مشكلات الصلاحيات في Android 11+
       });
 
       await Share.share({
@@ -184,18 +196,23 @@ export default function Home() {
         dialogTitle: 'فتح أو مشاركة ملف PDF'
       });
     } catch (error) {
-      console.error('حدث خطأ أثناء حفظ الملف:', error);
+      console.error('حدث خطأ أثناء حفظ أو مشاركة الملف:', error);
+    } finally {
+      if (isTempAppended && document.body.contains(element)) {
+        document.body.removeChild(element);
+      }
     }
   };
 
   const handleDownloadTablePDF = async () => {
     const element = document.getElementById('debts-table-container');
+    if (!element) return;
     const fileName = `جدول_الديون_${new Date().toISOString().slice(0, 10)}.pdf`;
     const opt = {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
+      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
     };
 
@@ -324,7 +341,7 @@ export default function Home() {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
+      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
@@ -435,7 +452,7 @@ export default function Home() {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
+      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
@@ -819,13 +836,13 @@ export default function Home() {
             <span className="text-xs mt-1">{t('debts')}</span>
           </button>
           <button onClick={() => navigate('/debts/add')} className="relative -mt-8">
-            <div className="w-14 h-14 bg-emerald-500 rounded-full flex items-center justify-center text-white shadow-lg hover:bg-emerald-600 transition">
-              <Plus className="w-8 h-8" />
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-xl">
+              <Plus className="w-8 h-8 text-white" />
             </div>
           </button>
-          <button onClick={() => navigate('/clients')} className="flex flex-col items-center py-2 text-gray-400">
+          <button onClick={() => navigate('/debts')} className="flex flex-col items-center py-2 text-gray-400">
             <Users className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('clients')}</span>
+            <span className="text-xs mt-1">{t('people')}</span>
           </button>
           <button onClick={() => navigate('/settings')} className="flex flex-col items-center py-2 text-gray-400">
             <Settings className="w-6 h-6" />
