@@ -157,45 +157,69 @@ export default function Home() {
     return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400';
   };
 
+  /**
+   * دالة مستقرة وموحدة لتصدير ومشاركة الـ PDF
+   * تعمل بكفاءة عالية سواء على الويب أو في أندرويد (Capacitor Native Platform)
+   */
   const saveAndExportPDF = async (element, fileName, opt) => {
-    if (!Capacitor.isNativePlatform()) {
-      html2pdf().set(opt).from(element).save();
-      return;
-    }
-
     try {
+      // إذا لم يكن التطبيق يعزف داخل بيئة نيتف أندرويد/موبايل، يتم التحميل المباشر للويب
+      if (!Capacitor.isNativePlatform()) {
+        await html2pdf().set(opt).from(element).save();
+        return;
+      }
+
+      // أندرويد: التأكد من إلحاق العنصر مؤقتاً بالصفحة لرسمه بشكل صحيح بواسطة html2canvas
+      const isTemporary = !document.body.contains(element);
+      if (isTemporary) {
+        element.style.position = 'fixed';
+        element.style.top = '-9999px';
+        element.style.left = '-9999px';
+        document.body.appendChild(element);
+      }
+
+      // استخراج Base64 الخاص بـ PDF
       const pdfBase64 = await html2pdf()
         .set(opt)
         .from(element)
         .outputPdf('datauristring');
 
-      const base64Data = pdfBase64.split(',')[1];
+      // إزالة العنصر المكتسب إن وجد
+      if (isTemporary && document.body.contains(element)) {
+        document.body.removeChild(element);
+      }
 
+      const base64Data = pdfBase64.split(',')[1];
+      const cleanFileName = fileName.replace(/[/\\?%*:|"<>]/g, '_');
+
+      // كتابة الملف في مسار الـ Cache المستقر لمنع استئذانات الـ Storage المعقدة في أندرويد
       const savedFile = await Filesystem.writeFile({
-        path: fileName,
+        path: cleanFileName,
         data: base64Data,
-        directory: Directory.Documents
+        directory: Directory.Cache
       });
 
+      // فتح شاشة المشاركة الرسمية للنظام
       await Share.share({
-        title: fileName,
+        title: cleanFileName,
         text: 'تم استخراج ملف PDF بنجاح',
         url: savedFile.uri,
         dialogTitle: 'فتح أو مشاركة ملف PDF'
       });
     } catch (error) {
-      console.error('حدث خطأ أثناء حفظ الملف:', error);
+      console.error('حدث خطأ أثناء استخراج أو مشاركة الملف:', error);
     }
   };
 
   const handleDownloadTablePDF = async () => {
     const element = document.getElementById('debts-table-container');
+    if (!element) return;
     const fileName = `جدول_الديون_${new Date().toISOString().slice(0, 10)}.pdf`;
     const opt = {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
+      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
     };
 
@@ -291,7 +315,7 @@ export default function Home() {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
+      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
@@ -402,7 +426,7 @@ export default function Home() {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
+      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
@@ -639,7 +663,7 @@ export default function Home() {
                             setSelectedDebt(debt);
                             setIsModalOpen(true);
                           }}
-                          title="إضافة قسط واستخراج شيك سداد"
+                          title="إضافة قسط واستخرج شيك سداد"
                           className="flex items-center gap-1 p-1.5 bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400 rounded-lg hover:bg-emerald-100 transition text-xs font-medium"
                         >
                           <CreditCard className="w-4 h-4" />
