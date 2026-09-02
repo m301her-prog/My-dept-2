@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { useNavigate } from 'react-router-dom';
 import html2pdf from 'html2pdf.js';
@@ -23,7 +23,8 @@ import {
   Layers,
   CheckCircle,
   DollarSign,
-  Loader2
+  Loader2,
+  RefreshCw
 } from 'lucide-react';
 
 export default function Home() {
@@ -39,7 +40,8 @@ export default function Home() {
     sendNotification,
     notificationsEnabled,
     updateDebt,
-    loading // حالة التحميل إذا كانت متاحة في Context
+    loading,
+    fetchDebtsData // دالة جلب بيانات العملاء من الـ Context إن وجدت
   } = useApp();
   
   const navigate = useNavigate();
@@ -54,10 +56,28 @@ export default function Home() {
   const [additionalDebtAmount, setAdditionalDebtAmount] = useState('');
   const [isAddDebtModalOpen, setIsAddDebtModalOpen] = useState(false);
 
-  // حساب إجمالي عدد الأقساط المتبقية عبر جميع الديون بأمان
+  // حساب إجمالي عدد الأقساط المتبقية عبر جميع الديون بأمان[cite: 1]
   const totalInstallmentsCount = (debts || []).reduce((acc, curr) => acc + (Number(curr.installmentsCount) || 0), 0);
 
-  // دالة مزامنة البيانات غير المحفوظة عند عودة النت
+  /**
+   * دالة إظهار وجلب بيانات العملاء فوراً عند فتح الحساب أو دخول المستخدم
+   */
+  const loadCustomerDataImmediately = useCallback(async () => {
+    try {
+      if (fetchDebtsData && typeof fetchDebtsData === 'function') {
+        await fetchDebtsData();
+      }
+    } catch (error) {
+      console.error('خطأ أثناء إظهار بيانات العملاء فوراً:', error);
+    }
+  }, [fetchDebtsData]);
+
+  useEffect(() => {
+    // تشغيل جلب البيانات فورا عند تحميل المكون أو وجود الحساب
+    loadCustomerDataImmediately();
+  }, [user, loadCustomerDataImmediately]);
+
+  // دالة مزامنة البيانات غير المحفوظة عند عودة النت[cite: 1]
   const syncOfflineData = async () => {
     const offlineQueue = JSON.parse(localStorage.getItem('pending_offline_debts') || '[]');
     if (offlineQueue.length === 0) return;
@@ -94,13 +114,14 @@ export default function Home() {
 
     const handleOnline = () => {
       syncOfflineData();
+      loadCustomerDataImmediately();
     };
 
     window.addEventListener('online', handleOnline);
     return () => {
       window.removeEventListener('online', handleOnline);
     };
-  }, []);
+  }, [loadCustomerDataImmediately]);
 
   useEffect(() => {
     if (!notificationsEnabled || !debts || debts.length === 0) return;
@@ -158,28 +179,40 @@ export default function Home() {
   };
 
   /**
-   * دالة تصدير مجهزة لحل مشكلة "الصفحة البيضاء"
-   * تصنع نسخة مستقلة باللون الأبيض الصريح لتوليد PDF بدون أخطاء الرسم
+   * دالة تصدير مجهزة لحل مشكلة "الصفحة البيضاء" نهائياً
+   * تحول الجدول إلى أبيض وأسود صريح وتستنسخه في الـ DOM مع انتظر مهلة معالجة
    */
   const saveAndExportPDF = async (element, fileName, opt) => {
-    // 1. استنساخ العنصر لحل مشكلة الشفافية والوضع الداكن
+    // 1. استنساخ العنصر لحل مشكلة الشفافية[cite: 1]
     const clone = element.cloneNode(true);
     
-    // إزالة أزرار الإجراءات من النسخة المستنسخة في حال تصدير الجدول
+    // إزالة أزرار الإجراءات من النسخة المستنسخة[cite: 1]
     const actionButtons = clone.querySelectorAll('button');
     actionButtons.forEach(btn => btn.style.display = 'none');
 
-    // إعطاء خلفية بيضاء صريحة ونصوص واضحة
+    // 2. تحويل كل العناصر الداخلية إلى ألوان أبيض وأسود حادة لتفادي الشفافية والصفحات البيضاء
+    const allElements = clone.querySelectorAll('*');
+    allElements.forEach(el => {
+      el.style.backgroundColor = '#ffffff';
+      el.style.color = '#000000';
+      el.style.borderColor = '#000000';
+      el.style.boxShadow = 'none';
+      el.style.textShadow = 'none';
+    });
+
+    // إعطاء النسخة حاوي أبيض وأسود صريح وسلس[cite: 1]
     clone.style.background = '#ffffff';
     clone.style.color = '#000000';
     clone.style.padding = '20px';
-    clone.style.width = '100%';
-    clone.style.maxWidth = '1000px';
+    clone.style.width = '1000px';
     clone.style.position = 'absolute';
     clone.style.left = '-9999px';
     clone.style.top = '0';
 
     document.body.appendChild(clone);
+
+    // مهلة قصيرة لإجبار المتصفح على رسم المكون المستنسخ في الـ DOM قبل التقاط الصورة
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     try {
       const customOpt = {
@@ -188,6 +221,7 @@ export default function Home() {
           scale: 2,
           useCORS: true,
           backgroundColor: '#ffffff',
+          logging: false,
           scrollX: 0,
           scrollY: 0
         }
@@ -220,7 +254,6 @@ export default function Home() {
     } catch (error) {
       console.error('حدث خطأ أثناء استخراج أو مشاركة الملف:', error);
     } finally {
-      // إزالة النسخة المؤقتة بعد الانتهاء
       if (document.body.contains(clone)) {
         document.body.removeChild(clone);
       }
@@ -246,70 +279,70 @@ export default function Home() {
     const installments = history.filter(h => h.type === 'installment' || h.type === 'payment');
 
     const historyRows = history.length > 0 ? history.map((item, index) => `
-      <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
-        <td style="padding: 8px; text-align: center;">${index + 1}</td>
-        <td style="padding: 8px; text-align: center;">${formatDate(item.date || new Date())}</td>
-        <td style="padding: 8px; text-align: center; color: ${item.type === 'add' ? '#dc2626' : '#16a34a'}; font-weight: bold;">
+      <tr style="border-bottom: 1px solid #000; font-size: 13px;">
+        <td style="padding: 8px; text-align: center; border: 1px solid #000;">${index + 1}</td>
+        <td style="padding: 8px; text-align: center; border: 1px solid #000;">${formatDate(item.date || new Date())}</td>
+        <td style="padding: 8px; text-align: center; border: 1px solid #000; font-weight: bold;">
           ${item.type === 'add' ? 'إضافة دين (+)' : 'سداد قسط (-)'}
         </td>
-        <td style="padding: 8px; text-align: center; font-weight: bold;">
+        <td style="padding: 8px; text-align: center; border: 1px solid #000; font-weight: bold;">
           ${formatCurrency(item.amount, debt.currency)}
         </td>
-        <td style="padding: 8px; text-align: center;">${item.note || '-'}</td>
+        <td style="padding: 8px; text-align: center; border: 1px solid #000;">${item.note || '-'}</td>
       </tr>
     `).join('') : `
       <tr>
-        <td colspan="5" style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">لا توجد حركة أقساط سابقة سجلت لهذا الدين</td>
+        <td colspan="5" style="padding: 12px; text-align: center; border: 1px solid #000; font-size: 13px;">لا توجد حركة أقساط سابقة سجلت لهذا الدين</td>
       </tr>
     `;
 
     const checkElement = document.createElement('div');
     checkElement.innerHTML = `
-      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
-        <div style="border: 3px solid #059669; padding: 25px; border-radius: 15px; background: #f0fdf4; max-width: 750px; margin: auto;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 20px;">
+      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #ffffff; color: #000000;">
+        <div style="border: 2px solid #000000; padding: 25px; background: #ffffff; max-width: 750px; margin: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000000; padding-bottom: 12px; margin-bottom: 20px;">
             <div>
-              <h2 style="color: #059669; margin: 0; font-size: 22px;">شيك إثبات وسجل دين</h2>
-              <span style="font-size: 12px; color: #666;">كشف حساب تفصيلي للشخص</span>
+              <h2 style="color: #000000; margin: 0; font-size: 22px; font-weight: bold;">شيك إثبات وسجل دين</h2>
+              <span style="font-size: 12px; color: #000000;">كشف حساب تفصيلي للشخص</span>
             </div>
-            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #059669;">تاريخ التقرير: ${formatDate(new Date())}</span>
+            <span style="font-size: 13px; color: #000000; background: #ffffff; padding: 4px 10px; border: 1px solid #000000;">تاريخ التقرير: ${formatDate(new Date())}</span>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; background: #fff; padding: 15px; border-radius: 10px; border: 1px solid #e5e7eb;">
-            <div style="font-size: 15px;">
-              <span style="color: #555;">الاسم / الطرف الثاني: </span><strong style="color: #111;">${debt.personName}</strong>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; background: #ffffff; padding: 15px; border: 1px solid #000000;">
+            <div style="font-size: 15px; color: #000000;">
+              <span>الاسم / الطرف الثاني: </span><strong style="color: #000000;">${debt.personName}</strong>
             </div>
-            <div style="font-size: 15px;">
-              <span style="color: #555;">نوع الدين: </span><strong>${debt.type === 'owed_to_me' ? 'مستحق لي (له)' : 'مستحق علي (عليه)'}</strong>
+            <div style="font-size: 15px; color: #000000;">
+              <span>نوع الدين: </span><strong style="color: #000000;">${debt.type === 'owed_to_me' ? 'مستحق لي (له)' : 'مستحق علي (عليه)'}</strong>
             </div>
-            <div style="font-size: 15px;">
-              <span style="color: #555;">تاريخ الاستحقاق: </span><strong>${formatDate(debt.dueDate)}</strong>
+            <div style="font-size: 15px; color: #000000;">
+              <span>تاريخ الاستحقاق: </span><strong style="color: #000000;">${formatDate(debt.dueDate)}</strong>
             </div>
-            <div style="font-size: 15px;">
-              <span style="color: #555;">الحالة الحالية: </span><strong style="color: ${debt.status === 'paid' ? '#16a34a' : '#d97706'};">${debt.status === 'paid' ? 'تم السداد بالكامل' : 'متبقي'}</strong>
+            <div style="font-size: 15px; color: #000000;">
+              <span>الحالة الحالية: </span><strong style="color: #000000;">${debt.status === 'paid' ? 'تم السداد بالكامل' : 'متبقي'}</strong>
             </div>
           </div>
 
-          <div style="margin-bottom: 20px; background: #e6f4ea; padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #a7f3d0;">
+          <div style="margin-bottom: 20px; background: #ffffff; padding: 15px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #000000;">
             <div>
-              <div style="font-size: 13px; color: #047857;">المبلغ الحالي / المتبقي للدفعة:</div>
-              <div style="font-size: 22px; font-weight: bold; color: #065f46;">${formatCurrency(debt.amount, debt.currency)}</div>
+              <div style="font-size: 13px; color: #000000;">المبلغ الحالي / المتبقي للدفعة:</div>
+              <div style="font-size: 22px; font-weight: bold; color: #000000;">${formatCurrency(debt.amount, debt.currency)}</div>
             </div>
             <div style="text-align: left;">
-              <div style="font-size: 13px; color: #047857;">عدد الأقساط المسددة:</div>
-              <div style="font-size: 18px; font-weight: bold; color: #065f46;">${installments.length}</div>
+              <div style="font-size: 13px; color: #000000;">عدد الأقساط المسددة:</div>
+              <div style="font-size: 18px; font-weight: bold; color: #000000;">${installments.length}</div>
             </div>
           </div>
 
-          <h3 style="font-size: 16px; color: #059669; margin-bottom: 10px;">جدول الأقساط والتحركات (السجل)</h3>
-          <table style="width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 20px; border: 1px solid #d1d5db;">
+          <h3 style="font-size: 16px; color: #000000; margin-bottom: 10px; font-weight: bold;">جدول الأقساط والتحركات (السجل)</h3>
+          <table style="width: 100%; border-collapse: collapse; background: #ffffff; margin-bottom: 20px; border: 1px solid #000000;">
             <thead>
-              <tr style="background: #059669; color: #fff; font-size: 13px;">
-                <th style="padding: 8px; text-align: center;">#</th>
-                <th style="padding: 8px; text-align: center;">التاريخ</th>
-                <th style="padding: 8px; text-align: center;">نوع العملية</th>
-                <th style="padding: 8px; text-align: center;">المبلغ</th>
-                <th style="padding: 8px; text-align: center;">ملاحظات</th>
+              <tr style="background: #ffffff; color: #000000; font-size: 13px; border-bottom: 2px solid #000000;">
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">#</th>
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">التاريخ</th>
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">نوع العملية</th>
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">المبلغ</th>
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">ملاحظات</th>
               </tr>
             </thead>
             <tbody>
@@ -317,7 +350,7 @@ export default function Home() {
             </tbody>
           </table>
 
-          <div style="display: flex; justify-content: space-between; margin-top: 30px; border-top: 1px dashed #059669; padding-top: 15px;">
+          <div style="display: flex; justify-content: space-between; margin-top: 30px; border-top: 1px dashed #000000; padding-top: 15px; color: #000000;">
             <p style="margin: 0; font-size: 14px;">توقيع المحرر: ...................</p>
             <p style="margin: 0; font-size: 14px;">توقيع المستلم: ...................</p>
           </div>
@@ -368,58 +401,58 @@ export default function Home() {
     }
 
     const historyRows = updatedHistory.map((item, index) => `
-      <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
-        <td style="padding: 8px; text-align: center;">${index + 1}</td>
-        <td style="padding: 8px; text-align: center;">${formatDate(item.date || new Date())}</td>
-        <td style="padding: 8px; text-align: center; color: ${item.type === 'add' ? '#dc2626' : '#16a34a'}; font-weight: bold;">
+      <tr style="border-bottom: 1px solid #000000; font-size: 13px;">
+        <td style="padding: 8px; text-align: center; border: 1px solid #000000;">${index + 1}</td>
+        <td style="padding: 8px; text-align: center; border: 1px solid #000000;">${formatDate(item.date || new Date())}</td>
+        <td style="padding: 8px; text-align: center; border: 1px solid #000000; font-weight: bold;">
           ${item.type === 'add' ? 'إضافة دين (+)' : 'سداد قسط (-)'}
         </td>
-        <td style="padding: 8px; text-align: center; font-weight: bold;">
+        <td style="padding: 8px; text-align: center; border: 1px solid #000000; font-weight: bold;">
           ${formatCurrency(item.amount, selectedDebt.currency)}
         </td>
-        <td style="padding: 8px; text-align: center;">${item.note || '-'}</td>
+        <td style="padding: 8px; text-align: center; border: 1px solid #000000;">${item.note || '-'}</td>
       </tr>
     `).join('');
 
     const receiptElement = document.createElement('div');
     receiptElement.innerHTML = `
-      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
-        <div style="border: 3px solid #2563eb; padding: 25px; border-radius: 15px; background: #eff6ff; max-width: 750px; margin: auto;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #2563eb; padding-bottom: 10px; margin-bottom: 20px;">
+      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #ffffff; color: #000000;">
+        <div style="border: 2px solid #000000; padding: 25px; background: #ffffff; max-width: 750px; margin: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000000; padding-bottom: 10px; margin-bottom: 20px;">
             <div>
-              <h2 style="color: #2563eb; margin: 0; font-size: 22px;">شيك وتوصيل سداد قسط</h2>
-              <span style="font-size: 12px; color: #666;">وصل إثبات عملية دفع وتحديث الحساب</span>
+              <h2 style="color: #000000; margin: 0; font-size: 22px; font-weight: bold;">شيك وتوصيل سداد قسط</h2>
+              <span style="font-size: 12px; color: #000000;">وصل إثبات عملية دفع وتحديث الحساب</span>
             </div>
-            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #2563eb;">التاريخ: ${formatDate(new Date())}</span>
+            <span style="font-size: 13px; color: #000000; background: #ffffff; padding: 4px 10px; border: 1px solid #000000;">التاريخ: ${formatDate(new Date())}</span>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; background: #fff; padding: 12px; border-radius: 10px; border: 1px solid #dbeafe;">
-            <div style="font-size: 15px;">
-              <span>اسم العميل / الطرف: </span><strong style="color: #111;">${selectedDebt.personName}</strong>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; background: #ffffff; padding: 12px; border: 1px solid #000000;">
+            <div style="font-size: 15px; color: #000000;">
+              <span>اسم العميل / الطرف: </span><strong style="color: #000000;">${selectedDebt.personName}</strong>
             </div>
-            <div style="font-size: 15px;">
-              <span>المبلغ المدفوع (القسط الحالي): </span><strong style="color: #16a34a;">${formatCurrency(amountPaid, selectedDebt.currency)}</strong>
+            <div style="font-size: 15px; color: #000000;">
+              <span>المبلغ المدفوع (القسط الحالي): </span><strong style="color: #000000;">${formatCurrency(amountPaid, selectedDebt.currency)}</strong>
             </div>
-            <div style="font-size: 15px;">
-              <span>المبلغ المتبقي الكلي: </span><strong style="color: #dc2626;">${formatCurrency(newAmount, selectedDebt.currency)}</strong>
+            <div style="font-size: 15px; color: #000000;">
+              <span>المبلغ المتبقي الكلي: </span><strong style="color: #000000;">${formatCurrency(newAmount, selectedDebt.currency)}</strong>
             </div>
-            <div style="font-size: 15px;">
-              <span>الأقساط المتبقية: </span><strong>${newInstallmentsCount}</strong>
+            <div style="font-size: 15px; color: #000000;">
+              <span>الأقساط المتبقية: </span><strong style="color: #000000;">${newInstallmentsCount}</strong>
             </div>
-            <div style="font-size: 15px;">
-              <span>حالة الدين: </span><strong>${updatedStatus === 'paid' ? 'مكتمل السداد' : 'قيد السداد'}</strong>
+            <div style="font-size: 15px; color: #000000;">
+              <span>حالة الدين: </span><strong style="color: #000000;">${updatedStatus === 'paid' ? 'مكتمل السداد' : 'قيد السداد'}</strong>
             </div>
           </div>
 
-          <h3 style="font-size: 15px; color: #2563eb; margin-bottom: 8px;">جدول وحركات الأقساط كاملة</h3>
-          <table style="width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 20px; border: 1px solid #cbd5e1;">
+          <h3 style="font-size: 15px; color: #000000; margin-bottom: 8px; font-weight: bold;">جدول وحركات الأقساط كاملة</h3>
+          <table style="width: 100%; border-collapse: collapse; background: #ffffff; margin-bottom: 20px; border: 1px solid #000000;">
             <thead>
-              <tr style="background: #2563eb; color: #fff; font-size: 13px;">
-                <th style="padding: 8px; text-align: center;">#</th>
-                <th style="padding: 8px; text-align: center;">التاريخ</th>
-                <th style="padding: 8px; text-align: center;">العملية</th>
-                <th style="padding: 8px; text-align: center;">المبلغ</th>
-                <th style="padding: 8px; text-align: center;">البيان</th>
+              <tr style="background: #ffffff; color: #000000; font-size: 13px; border-bottom: 2px solid #000000;">
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">#</th>
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">التاريخ</th>
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">العملية</th>
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">المبلغ</th>
+                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">البيان</th>
               </tr>
             </thead>
             <tbody>
@@ -427,7 +460,7 @@ export default function Home() {
             </tbody>
           </table>
 
-          <div style="display: flex; justify-content: space-between; margin-top: 25px; border-top: 1px dashed #2563eb; padding-top: 15px;">
+          <div style="display: flex; justify-content: space-between; margin-top: 25px; border-top: 1px dashed #000000; padding-top: 15px; color: #000000;">
             <p style="margin: 0; font-size: 14px;">توقيع المستلم: ...................</p>
             <p style="margin: 0; font-size: 14px;">توقيع الدافع: ...................</p>
           </div>
@@ -480,12 +513,12 @@ export default function Home() {
     setSelectedAddDebt(null);
   };
 
-  // شاشة تحميل مؤقتة عند الفتح الأول حتى تجهز البيانات
+  // شاشة تحميل مؤقتة عند الفتح الأول حتى تجهز البيانات[cite: 1]
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col justify-center items-center">
         <Loader2 className="w-10 h-10 text-emerald-500 animate-spin mb-4" />
-        <p className="text-gray-600 dark:text-gray-300 font-medium">جاري تحميل البيانات...</p>
+        <p className="text-gray-600 dark:text-gray-300 font-medium">جاري تحميل بيانات العملاء...</p>
       </div>
     );
   }
@@ -506,6 +539,14 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={loadCustomerDataImmediately}
+              className="p-2 rounded-xl bg-white/20 hover:bg-white/30 transition flex items-center gap-1 text-xs"
+              title="تحديث بيانات العملاء فوراً"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+
             <div className="flex bg-white/20 rounded-xl p-1 backdrop-blur-sm">
               {['ar', 'fr', 'en'].map(lang => (
                 <button
