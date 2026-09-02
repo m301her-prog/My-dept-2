@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { useNavigate } from 'react-router-dom';
-import html2pdf from 'html2pdf.js';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { Capacitor } from '@capacitor/core';
@@ -41,27 +42,21 @@ export default function Home() {
     notificationsEnabled,
     updateDebt,
     loading,
-    fetchDebtsData // دالة جلب بيانات العملاء من الـ Context إن وجدت
+    fetchDebtsData
   } = useApp();
-  
+
   const navigate = useNavigate();
 
-  // State للتحكم في نافذة إضافة قسط
   const [selectedDebt, setSelectedDebt] = useState(null);
   const [installmentAmount, setInstallmentAmount] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // State للتحكم في نافذة إضافة دين جديد
   const [selectedAddDebt, setSelectedAddDebt] = useState(null);
   const [additionalDebtAmount, setAdditionalDebtAmount] = useState('');
   const [isAddDebtModalOpen, setIsAddDebtModalOpen] = useState(false);
 
-  // حساب إجمالي عدد الأقساط المتبقية عبر جميع الديون بأمان[cite: 1]
   const totalInstallmentsCount = (debts || []).reduce((acc, curr) => acc + (Number(curr.installmentsCount) || 0), 0);
 
-  /**
-   * دالة إظهار وجلب بيانات العملاء فوراً عند فتح الحساب أو دخول المستخدم
-   */
   const loadCustomerDataImmediately = useCallback(async () => {
     try {
       if (fetchDebtsData && typeof fetchDebtsData === 'function') {
@@ -73,79 +68,8 @@ export default function Home() {
   }, [fetchDebtsData]);
 
   useEffect(() => {
-    // تشغيل جلب البيانات فورا عند تحميل المكون أو وجود الحساب
     loadCustomerDataImmediately();
   }, [user, loadCustomerDataImmediately]);
-
-  // دالة مزامنة البيانات غير المحفوظة عند عودة النت[cite: 1]
-  const syncOfflineData = async () => {
-    const offlineQueue = JSON.parse(localStorage.getItem('pending_offline_debts') || '[]');
-    if (offlineQueue.length === 0) return;
-
-    const remainingQueue = [];
-
-    for (const item of offlineQueue) {
-      try {
-        const response = await fetch('/api/your-backend-endpoint', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-tenant-schema': item.tenantSchema || ''
-          },
-          body: JSON.stringify(item)
-        });
-
-        const result = await response.json();
-        if (!result.success) {
-          remainingQueue.push(item);
-        }
-      } catch (err) {
-        remainingQueue.push(item);
-      }
-    }
-
-    localStorage.setItem('pending_offline_debts', JSON.stringify(remainingQueue));
-  };
-
-  useEffect(() => {
-    if (navigator.onLine) {
-      syncOfflineData();
-    }
-
-    const handleOnline = () => {
-      syncOfflineData();
-      loadCustomerDataImmediately();
-    };
-
-    window.addEventListener('online', handleOnline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-    };
-  }, [loadCustomerDataImmediately]);
-
-  useEffect(() => {
-    if (!notificationsEnabled || !debts || debts.length === 0) return;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    debts.forEach(debt => {
-      if (debt.status === 'paid') return;
-
-      const dueDate = new Date(debt.dueDate);
-      dueDate.setHours(0, 0, 0, 0);
-
-      const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
-
-      if (diffDays === 0) {
-        sendNotification(t('paymentReminder'), `${t('dueToday')}: ${debt.personName} - ${formatCurrency(debt.amount, debt.currency)}`);
-      } else if (diffDays === 1) {
-        sendNotification(t('paymentReminder'), `${t('dueTomorrow')}: ${debt.personName} - ${formatCurrency(debt.amount, debt.currency)}`);
-      } else if (diffDays < 0) {
-        sendNotification(t('overdueNotice'), `${debt.personName} - ${formatCurrency(debt.amount, debt.currency)}`);
-      }
-    });
-  }, [debts, t, notificationsEnabled, sendNotification]);
 
   const recentDebts = [...(debts || [])]
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -171,202 +95,99 @@ export default function Home() {
     });
   };
 
-  const getStatusColor = (debt) => {
-    if (debt.status === 'paid') return 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400';
-    const dueDate = new Date(debt.dueDate);
-    if (dueDate < new Date()) return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400';
-    return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400';
-  };
-
   /**
-   * دالة تصدير مجهزة لحل مشكلة "الصفحة البيضاء" نهائياً
-   * تحول الجدول إلى أبيض وأسود صريح وتستنسخه في الـ DOM مع انتظر مهلة معالجة
+   * دالة المساعدة لمعالجة وحفظ ملف الـ PDF الناتج عبر Capacitor أو المتصفح
    */
-  const saveAndExportPDF = async (element, fileName, opt) => {
-    // 1. استنساخ العنصر لحل مشكلة الشفافية[cite: 1]
-    const clone = element.cloneNode(true);
-    
-    // إزالة أزرار الإجراءات من النسخة المستنسخة[cite: 1]
-    const actionButtons = clone.querySelectorAll('button');
-    actionButtons.forEach(btn => btn.style.display = 'none');
-
-    // 2. تحويل كل العناصر الداخلية إلى ألوان أبيض وأسود حادة لتفادي الشفافية والصفحات البيضاء
-    const allElements = clone.querySelectorAll('*');
-    allElements.forEach(el => {
-      el.style.backgroundColor = '#ffffff';
-      el.style.color = '#000000';
-      el.style.borderColor = '#000000';
-      el.style.boxShadow = 'none';
-      el.style.textShadow = 'none';
-    });
-
-    // إعطاء النسخة حاوي أبيض وأسود صريح وسلس[cite: 1]
-    clone.style.background = '#ffffff';
-    clone.style.color = '#000000';
-    clone.style.padding = '20px';
-    clone.style.width = '1000px';
-    clone.style.position = 'absolute';
-    clone.style.left = '-9999px';
-    clone.style.top = '0';
-
-    document.body.appendChild(clone);
-
-    // مهلة قصيرة لإجبار المتصفح على رسم المكون المستنسخ في الـ DOM قبل التقاط الصورة
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
+  const handlePDFOutput = async (doc, fileName) => {
     try {
-      const customOpt = {
-        ...opt,
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: '#ffffff',
-          logging: false,
-          scrollX: 0,
-          scrollY: 0
-        }
-      };
-
       if (!Capacitor.isNativePlatform()) {
-        await html2pdf().set(customOpt).from(clone).save();
+        doc.save(fileName);
       } else {
-        const pdfBase64 = await html2pdf()
-          .set(customOpt)
-          .from(clone)
-          .outputPdf('datauristring');
-
-        const base64Data = pdfBase64.split(',')[1];
+        const pdfBase64 = doc.output('datauristring').split(',')[1];
         const cleanFileName = fileName.replace(/[/\\?%*:|"<>]/g, '_');
 
         const savedFile = await Filesystem.writeFile({
           path: cleanFileName,
-          data: base64Data,
+          data: pdfBase64,
           directory: Directory.Cache
         });
 
         await Share.share({
           title: cleanFileName,
-          text: 'تم استخراج ملف PDF بنجاح',
+          text: 'تم توليد ملف PDF بنجاح',
           url: savedFile.uri,
           dialogTitle: 'فتح أو مشاركة ملف PDF'
         });
       }
     } catch (error) {
-      console.error('حدث خطأ أثناء استخراج أو مشاركة الملف:', error);
-    } finally {
-      if (document.body.contains(clone)) {
-        document.body.removeChild(clone);
-      }
+      console.error('خطأ في استخراج/مشاركة PDF:', error);
     }
   };
 
+  /**
+   * توليد جدول الديون برمجياً بدلاً من تصوير الشاشة
+   */
   const handleDownloadTablePDF = async () => {
-    const element = document.getElementById('debts-table-container');
-    if (!element) return;
-    const fileName = `جدول_الديون_${new Date().toISOString().slice(0, 10)}.pdf`;
-    const opt = {
-      margin: 10,
-      filename: fileName,
-      image: { type: 'jpeg', quality: 0.98 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
-    };
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
-    await saveAndExportPDF(element, fileName, opt);
+    doc.setFontSize(16);
+    doc.text('Debts Summary / جدول الديون', 14, 15);
+
+    const tableHeaders = [['Person Name', 'Amount', 'Installments', 'Status']];
+    const tableData = recentDebts.map(debt => [
+      debt.personName || '-',
+      `${debt.amount} ${debt.currency || 'DZD'}`,
+      debt.installmentsCount || '0',
+      debt.status === 'paid' ? 'Paid' : 'Pending'
+    ]);
+
+    doc.autoTable({
+      startY: 25,
+      head: tableHeaders,
+      body: tableData,
+      theme: 'grid',
+      styles: { fontSize: 10, cellPadding: 3 },
+      headStyles: { fillColor: [16, 185, 129], textColor: [255, 255, 255] }
+    });
+
+    await handlePDFOutput(doc, `Debts_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
+  /**
+   * توليد الشيك مباشرة في الذاكرة
+   */
   const handlePrintCheckPDF = async (debt) => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+    doc.setFontSize(18);
+    doc.text('STATEMENT / DEBT CHECK', 105, 20, { align: 'center' });
+
+    doc.setFontSize(10);
+    doc.text(`Date: ${formatDate(new Date())}`, 14, 30);
+    doc.text(`Client: ${debt.personName}`, 14, 38);
+    doc.text(`Type: ${debt.type === 'owed_to_me' ? 'Owed to me' : 'I owe'}`, 14, 46);
+    doc.text(`Total Amount: ${debt.amount} ${debt.currency || 'DZD'}`, 14, 54);
+    doc.text(`Status: ${debt.status === 'paid' ? 'Paid' : 'Pending'}`, 14, 62);
+
     const history = debt.history || [];
-    const installments = history.filter(h => h.type === 'installment' || h.type === 'payment');
+    const tableHeaders = [['#', 'Date', 'Type', 'Amount', 'Note']];
+    const tableData = history.map((item, index) => [
+      index + 1,
+      formatDate(item.date || new Date()),
+      item.type === 'add' ? 'Addition (+)' : 'Payment (-)',
+      `${item.amount} ${debt.currency || 'DZD'}`,
+      item.note || '-'
+    ]);
 
-    const historyRows = history.length > 0 ? history.map((item, index) => `
-      <tr style="border-bottom: 1px solid #000; font-size: 13px;">
-        <td style="padding: 8px; text-align: center; border: 1px solid #000;">${index + 1}</td>
-        <td style="padding: 8px; text-align: center; border: 1px solid #000;">${formatDate(item.date || new Date())}</td>
-        <td style="padding: 8px; text-align: center; border: 1px solid #000; font-weight: bold;">
-          ${item.type === 'add' ? 'إضافة دين (+)' : 'سداد قسط (-)'}
-        </td>
-        <td style="padding: 8px; text-align: center; border: 1px solid #000; font-weight: bold;">
-          ${formatCurrency(item.amount, debt.currency)}
-        </td>
-        <td style="padding: 8px; text-align: center; border: 1px solid #000;">${item.note || '-'}</td>
-      </tr>
-    `).join('') : `
-      <tr>
-        <td colspan="5" style="padding: 12px; text-align: center; border: 1px solid #000; font-size: 13px;">لا توجد حركة أقساط سابقة سجلت لهذا الدين</td>
-      </tr>
-    `;
+    doc.autoTable({
+      startY: 70,
+      head: tableHeaders,
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [31, 41, 55], textColor: [255, 255, 255] }
+    });
 
-    const checkElement = document.createElement('div');
-    checkElement.innerHTML = `
-      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #ffffff; color: #000000;">
-        <div style="border: 2px solid #000000; padding: 25px; background: #ffffff; max-width: 750px; margin: auto;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000000; padding-bottom: 12px; margin-bottom: 20px;">
-            <div>
-              <h2 style="color: #000000; margin: 0; font-size: 22px; font-weight: bold;">شيك إثبات وسجل دين</h2>
-              <span style="font-size: 12px; color: #000000;">كشف حساب تفصيلي للشخص</span>
-            </div>
-            <span style="font-size: 13px; color: #000000; background: #ffffff; padding: 4px 10px; border: 1px solid #000000;">تاريخ التقرير: ${formatDate(new Date())}</span>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; background: #ffffff; padding: 15px; border: 1px solid #000000;">
-            <div style="font-size: 15px; color: #000000;">
-              <span>الاسم / الطرف الثاني: </span><strong style="color: #000000;">${debt.personName}</strong>
-            </div>
-            <div style="font-size: 15px; color: #000000;">
-              <span>نوع الدين: </span><strong style="color: #000000;">${debt.type === 'owed_to_me' ? 'مستحق لي (له)' : 'مستحق علي (عليه)'}</strong>
-            </div>
-            <div style="font-size: 15px; color: #000000;">
-              <span>تاريخ الاستحقاق: </span><strong style="color: #000000;">${formatDate(debt.dueDate)}</strong>
-            </div>
-            <div style="font-size: 15px; color: #000000;">
-              <span>الحالة الحالية: </span><strong style="color: #000000;">${debt.status === 'paid' ? 'تم السداد بالكامل' : 'متبقي'}</strong>
-            </div>
-          </div>
-
-          <div style="margin-bottom: 20px; background: #ffffff; padding: 15px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #000000;">
-            <div>
-              <div style="font-size: 13px; color: #000000;">المبلغ الحالي / المتبقي للدفعة:</div>
-              <div style="font-size: 22px; font-weight: bold; color: #000000;">${formatCurrency(debt.amount, debt.currency)}</div>
-            </div>
-            <div style="text-align: left;">
-              <div style="font-size: 13px; color: #000000;">عدد الأقساط المسددة:</div>
-              <div style="font-size: 18px; font-weight: bold; color: #000000;">${installments.length}</div>
-            </div>
-          </div>
-
-          <h3 style="font-size: 16px; color: #000000; margin-bottom: 10px; font-weight: bold;">جدول الأقساط والتحركات (السجل)</h3>
-          <table style="width: 100%; border-collapse: collapse; background: #ffffff; margin-bottom: 20px; border: 1px solid #000000;">
-            <thead>
-              <tr style="background: #ffffff; color: #000000; font-size: 13px; border-bottom: 2px solid #000000;">
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">#</th>
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">التاريخ</th>
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">نوع العملية</th>
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">المبلغ</th>
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">ملاحظات</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${historyRows}
-            </tbody>
-          </table>
-
-          <div style="display: flex; justify-content: space-between; margin-top: 30px; border-top: 1px dashed #000000; padding-top: 15px; color: #000000;">
-            <p style="margin: 0; font-size: 14px;">توقيع المحرر: ...................</p>
-            <p style="margin: 0; font-size: 14px;">توقيع المستلم: ...................</p>
-          </div>
-        </div>
-      </div>
-    `;
-
-    const fileName = `شيك_دين_${debt.personName}.pdf`;
-    const opt = {
-      margin: 10,
-      filename: fileName,
-      image: { type: 'jpeg', quality: 0.98 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-
-    await saveAndExportPDF(checkElement, fileName, opt);
+    await handlePDFOutput(doc, `Check_${debt.personName}.pdf`);
   };
 
   const handlePayInstallment = async () => {
@@ -374,10 +195,8 @@ export default function Home() {
 
     const amountPaid = parseFloat(installmentAmount);
     const newAmount = Math.max(0, selectedDebt.amount - amountPaid);
-    
     const currentInstallmentsCount = Number(selectedDebt.installmentsCount) || 0;
     const newInstallmentsCount = Math.max(0, currentInstallmentsCount - 1);
-
     const updatedStatus = newAmount === 0 ? 'paid' : selectedDebt.status;
 
     const newHistoryItem = {
@@ -400,83 +219,36 @@ export default function Home() {
       });
     }
 
-    const historyRows = updatedHistory.map((item, index) => `
-      <tr style="border-bottom: 1px solid #000000; font-size: 13px;">
-        <td style="padding: 8px; text-align: center; border: 1px solid #000000;">${index + 1}</td>
-        <td style="padding: 8px; text-align: center; border: 1px solid #000000;">${formatDate(item.date || new Date())}</td>
-        <td style="padding: 8px; text-align: center; border: 1px solid #000000; font-weight: bold;">
-          ${item.type === 'add' ? 'إضافة دين (+)' : 'سداد قسط (-)'}
-        </td>
-        <td style="padding: 8px; text-align: center; border: 1px solid #000000; font-weight: bold;">
-          ${formatCurrency(item.amount, selectedDebt.currency)}
-        </td>
-        <td style="padding: 8px; text-align: center; border: 1px solid #000000;">${item.note || '-'}</td>
-      </tr>
-    `).join('');
+    // توليد وصل التسديد برمجياً
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-    const receiptElement = document.createElement('div');
-    receiptElement.innerHTML = `
-      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #ffffff; color: #000000;">
-        <div style="border: 2px solid #000000; padding: 25px; background: #ffffff; max-width: 750px; margin: auto;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000000; padding-bottom: 10px; margin-bottom: 20px;">
-            <div>
-              <h2 style="color: #000000; margin: 0; font-size: 22px; font-weight: bold;">شيك وتوصيل سداد قسط</h2>
-              <span style="font-size: 12px; color: #000000;">وصل إثبات عملية دفع وتحديث الحساب</span>
-            </div>
-            <span style="font-size: 13px; color: #000000; background: #ffffff; padding: 4px 10px; border: 1px solid #000000;">التاريخ: ${formatDate(new Date())}</span>
-          </div>
+    doc.setFontSize(16);
+    doc.text('PAYMENT RECEIPT', 105, 20, { align: 'center' });
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; background: #ffffff; padding: 12px; border: 1px solid #000000;">
-            <div style="font-size: 15px; color: #000000;">
-              <span>اسم العميل / الطرف: </span><strong style="color: #000000;">${selectedDebt.personName}</strong>
-            </div>
-            <div style="font-size: 15px; color: #000000;">
-              <span>المبلغ المدفوع (القسط الحالي): </span><strong style="color: #000000;">${formatCurrency(amountPaid, selectedDebt.currency)}</strong>
-            </div>
-            <div style="font-size: 15px; color: #000000;">
-              <span>المبلغ المتبقي الكلي: </span><strong style="color: #000000;">${formatCurrency(newAmount, selectedDebt.currency)}</strong>
-            </div>
-            <div style="font-size: 15px; color: #000000;">
-              <span>الأقساط المتبقية: </span><strong style="color: #000000;">${newInstallmentsCount}</strong>
-            </div>
-            <div style="font-size: 15px; color: #000000;">
-              <span>حالة الدين: </span><strong style="color: #000000;">${updatedStatus === 'paid' ? 'مكتمل السداد' : 'قيد السداد'}</strong>
-            </div>
-          </div>
+    doc.setFontSize(10);
+    doc.text(`Client: ${selectedDebt.personName}`, 14, 32);
+    doc.text(`Paid Amount: ${amountPaid} ${selectedDebt.currency || 'DZD'}`, 14, 40);
+    doc.text(`Remaining Amount: ${newAmount} ${selectedDebt.currency || 'DZD'}`, 14, 48);
+    doc.text(`Date: ${formatDate(new Date())}`, 14, 56);
 
-          <h3 style="font-size: 15px; color: #000000; margin-bottom: 8px; font-weight: bold;">جدول وحركات الأقساط كاملة</h3>
-          <table style="width: 100%; border-collapse: collapse; background: #ffffff; margin-bottom: 20px; border: 1px solid #000000;">
-            <thead>
-              <tr style="background: #ffffff; color: #000000; font-size: 13px; border-bottom: 2px solid #000000;">
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">#</th>
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">التاريخ</th>
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">العملية</th>
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">المبلغ</th>
-                <th style="padding: 8px; text-align: center; border: 1px solid #000000;">البيان</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${historyRows}
-            </tbody>
-          </table>
+    const tableHeaders = [['#', 'Date', 'Type', 'Amount', 'Note']];
+    const tableData = updatedHistory.map((item, index) => [
+      index + 1,
+      formatDate(item.date || new Date()),
+      item.type === 'add' ? 'Addition (+)' : 'Payment (-)',
+      `${item.amount} ${selectedDebt.currency || 'DZD'}`,
+      item.note || '-'
+    ]);
 
-          <div style="display: flex; justify-content: space-between; margin-top: 25px; border-top: 1px dashed #000000; padding-top: 15px; color: #000000;">
-            <p style="margin: 0; font-size: 14px;">توقيع المستلم: ...................</p>
-            <p style="margin: 0; font-size: 14px;">توقيع الدافع: ...................</p>
-          </div>
-        </div>
-      </div>
-    `;
+    doc.autoTable({
+      startY: 65,
+      head: tableHeaders,
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [16, 185, 129], textColor: [255, 255, 255] }
+    });
 
-    const fileName = `شيك_سداد_${selectedDebt.personName}.pdf`;
-    const opt = {
-      margin: 10,
-      filename: fileName,
-      image: { type: 'jpeg', quality: 0.98 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
-
-    await saveAndExportPDF(receiptElement, fileName, opt);
+    await handlePDFOutput(doc, `Receipt_${selectedDebt.personName}.pdf`);
 
     setIsModalOpen(false);
     setInstallmentAmount('');
@@ -513,7 +285,6 @@ export default function Home() {
     setSelectedAddDebt(null);
   };
 
-  // شاشة تحميل مؤقتة عند الفتح الأول حتى تجهز البيانات[cite: 1]
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col justify-center items-center">
@@ -533,9 +304,6 @@ export default function Home() {
             <h1 className="text-2xl font-bold">
               {user?.name || user?.email?.split('@')[0] || 'مرحباً بك'}
             </h1>
-            <p className="text-emerald-100 text-sm mt-1">
-              {language === 'ar' ? 'كيف حالك اليوم؟' : ''}
-            </p>
           </div>
 
           <div className="flex items-center gap-2">
@@ -566,7 +334,6 @@ export default function Home() {
             <button
               onClick={() => setDarkMode(!darkMode)}
               className="p-2.5 rounded-xl bg-white/20 hover:bg-white/30 transition"
-              title={darkMode ? t('lightMode') : t('darkMode')}
             >
               {darkMode ? (
                 <div className="w-5 h-5 rounded-full bg-yellow-400" />
@@ -592,7 +359,7 @@ export default function Home() {
       {/* Stats Cards */}
       <div className="px-4 -mt-14 mb-6">
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl border-l-4 border-emerald-500 hover:scale-[1.02] transition-transform">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl border-l-4 border-emerald-500">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
                 <TrendingUp className="w-5 h-5 text-emerald-500" />
@@ -604,7 +371,7 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl border-l-4 border-red-500 hover:scale-[1.02] transition-transform">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl border-l-4 border-red-500">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-10 h-10 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
                 <TrendingDown className="w-5 h-5 text-red-500" />
@@ -622,118 +389,66 @@ export default function Home() {
                 <Layers className="w-5 h-5 text-blue-500" />
               </div>
               <div>
-                <span className="text-xs text-gray-500 dark:text-gray-400 font-medium block">إجمالي عدد الأقساط المتبقية</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-medium block">إجمالي الأقساط المتبقية</span>
                 <span className="text-2xl font-bold text-blue-600 dark:text-blue-400">{totalInstallmentsCount} قسط</span>
               </div>
-            </div>
-          </div>
-
-          <div className="col-span-2 bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-xl">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-emerald-500" />
-                <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">{t('statistics')}</span>
-              </div>
-              <span className="text-2xl font-bold text-gray-900 dark:text-white">{statistics?.paidRatio || 0}%</span>
-            </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3 overflow-hidden">
-              <div
-                className="bg-gradient-to-r from-emerald-400 to-teal-500 h-3 rounded-full transition-all duration-500"
-                style={{ width: `${statistics?.paidRatio || 0}%` }}
-              />
-            </div>
-            <div className="flex justify-between mt-3 text-sm">
-              <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                {t('paidDebts')}: {statistics?.paidDebtsCount || 0}
-              </span>
-              <span className="text-yellow-600 dark:text-yellow-400 font-medium">
-                {t('pendingDebts')}: {statistics?.pendingDebtsCount || 0}
-              </span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Recent Activity Table */}
+      {/* Table Section */}
       {recentDebts.length > 0 ? (
         <div className="px-4 mb-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="flex items-center gap-2 text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-gray-500 dark:text-gray-400 uppercase">
               <Activity className="w-4 h-4" />
               {t('recentActivity')}
             </h2>
             
             <button
               onClick={handleDownloadTablePDF}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg shadow transition font-medium"
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-emerald-500 text-white rounded-lg shadow font-medium"
             >
               <Download className="w-4 h-4" />
-              <span>تحميل الجدول</span>
-              <Share2 className="w-3.5 h-3.5 opacity-80" />
-              <span className="text-[10px] bg-emerald-700 px-1 rounded">PDF</span>
+              <span>تحميل PDF</span>
             </button>
           </div>
 
-          <div id="debts-table-container" className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden p-2">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden p-2">
             <div className="overflow-x-auto">
               <table className="w-full text-right text-sm text-gray-700 dark:text-gray-200">
-                <thead className="bg-gray-100 dark:bg-gray-700 text-xs uppercase text-gray-600 dark:text-gray-300">
+                <thead className="bg-gray-100 dark:bg-gray-700 text-xs uppercase">
                   <tr>
                     <th className="p-3">الاسم</th>
                     <th className="p-3">المبلغ</th>
                     <th className="p-3">الأقساط</th>
-                    <th className="p-3">الحالة</th>
-                    <th className="p-3">إجراءات (مشاركة PDF / أقساط / إضافة)</th>
+                    <th className="p-3">الإجراءات</th>
                   </tr>
                 </thead>
                 <tbody>
                   {recentDebts.map((debt) => (
                     <tr key={debt.id} className="border-b border-gray-100 dark:border-gray-700">
                       <td className="p-3 font-semibold">{debt.personName}</td>
-                      <td className={`p-3 font-bold ${debt.type === 'owed_to_me' ? 'text-emerald-500' : 'text-red-500'}`}>
-                        {formatCurrency(debt.amount, debt.currency)}
-                      </td>
-                      <td className="p-3 font-medium text-blue-600 dark:text-blue-400">
-                        {debt.installmentsCount || 0}
-                      </td>
-                      <td className="p-3">
-                        <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(debt)}`}>
-                          {debt.status === 'paid' ? t('paid') : t('pending')}
-                        </span>
-                      </td>
+                      <td className="p-3 font-bold">{formatCurrency(debt.amount, debt.currency)}</td>
+                      <td className="p-3 text-blue-600 font-medium">{debt.installmentsCount || 0}</td>
                       <td className="p-3 flex items-center gap-2">
                         <button
                           onClick={() => handlePrintCheckPDF(debt)}
-                          title="عرض ومشاركة الشيك PDF"
-                          className="flex items-center gap-1 p-1.5 bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 rounded-lg hover:bg-blue-100 transition text-xs font-medium"
+                          className="p-1.5 bg-blue-50 text-blue-600 rounded-lg text-xs font-medium flex items-center gap-1"
                         >
                           <FileText className="w-4 h-4" />
-                          <Share2 className="w-3.5 h-3.5" />
-                          <span className="text-[10px] font-bold border border-blue-400 px-0.5 rounded">PDF</span>
+                          <span>شيك</span>
                         </button>
-
                         <button
                           onClick={() => {
                             setSelectedDebt(debt);
                             setIsModalOpen(true);
                           }}
-                          title="إضافة قسط واستخرج شيك سداد"
-                          className="flex items-center gap-1 p-1.5 bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400 rounded-lg hover:bg-emerald-100 transition text-xs font-medium"
+                          className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-xs font-medium flex items-center gap-1"
                         >
                           <CreditCard className="w-4 h-4" />
                           <span>قسط</span>
-                        </button>
-
-                        <button
-                          onClick={() => {
-                            setSelectedAddDebt(debt);
-                            setIsAddDebtModalOpen(true);
-                          }}
-                          title="إضافة دين جديد يزيد على الحالي"
-                          className="flex items-center gap-1 p-1.5 bg-purple-50 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400 rounded-lg hover:bg-purple-100 transition text-xs font-medium"
-                        >
-                          <PlusCircle className="w-4 h-4" />
-                          <span>دين جديد</span>
                         </button>
                       </td>
                     </tr>
@@ -743,133 +458,32 @@ export default function Home() {
             </div>
           </div>
         </div>
-      ) : (
-        <div className="px-4 mb-6 text-center py-8 bg-white dark:bg-gray-800 rounded-2xl shadow-md">
-          <p className="text-gray-500 dark:text-gray-400 text-sm">لا توجد ديون أو مسجلات سابقة حتى الآن.</p>
-        </div>
-      )}
+      ) : null}
 
-      {/* Modal إضافة قسط وخصمه */}
+      {/* Modal قسط */}
       {isModalOpen && selectedDebt && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
-            <button
-              onClick={() => setIsModalOpen(false)}
-              className="absolute left-4 top-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-            >
+            <button onClick={() => setIsModalOpen(false)} className="absolute left-4 top-4 text-gray-400">
               <X className="w-5 h-5" />
             </button>
-
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
-              خصم قسط من الدين
-            </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-              العميل: <span className="font-semibold text-gray-800 dark:text-gray-200">{selectedDebt.personName}</span>
-              <br />
-              إجمالي الدين الحالي: <span className="font-bold text-emerald-600">{formatCurrency(selectedDebt.amount, selectedDebt.currency)}</span>
-              <br />
-              الأقساط المتبقية: <span className="font-bold text-blue-600">{selectedDebt.installmentsCount || 0}</span>
-            </p>
-
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                مبلغ القسط المراد خصمه:
-              </label>
-              <input
-                type="number"
-                value={installmentAmount}
-                onChange={(e) => setInstallmentAmount(e.target.value)}
-                placeholder="أدخل مبلغ القسط..."
-                className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={handlePayInstallment}
-                className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white py-3 rounded-xl font-bold shadow-lg transition flex items-center justify-center gap-2"
-              >
-                <span>تسديد قسط ومشاركة</span>
-                <Share2 className="w-4 h-4" />
-                <span className="text-xs bg-emerald-700 px-1.5 py-0.5 rounded border border-emerald-400">PDF</span>
-              </button>
-            </div>
+            <h3 className="text-lg font-bold mb-4">خصم قسط من الدين</h3>
+            <input
+              type="number"
+              value={installmentAmount}
+              onChange={(e) => setInstallmentAmount(e.target.value)}
+              placeholder="المبلغ..."
+              className="w-full p-3 bg-gray-50 border rounded-xl mb-4"
+            />
+            <button
+              onClick={handlePayInstallment}
+              className="w-full bg-emerald-500 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2"
+            >
+              <span>تسديد واستخراج PDF</span>
+            </button>
           </div>
         </div>
       )}
-
-      {/* Modal إضافة دين جديد */}
-      {isAddDebtModalOpen && selectedAddDebt && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
-            <button
-              onClick={() => setIsAddDebtModalOpen(false)}
-              className="absolute left-4 top-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">
-              إضافة دين جديد للعميل
-            </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-              العميل: <span className="font-semibold text-gray-800 dark:text-gray-200">{selectedAddDebt.personName}</span>
-              <br />
-              الدين الحالي: <span className="font-bold text-emerald-600">{formatCurrency(selectedAddDebt.amount, selectedAddDebt.currency)}</span>
-            </p>
-
-            <div className="mb-4">
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                مبلغ الدين الإضافي:
-              </label>
-              <input
-                type="number"
-                value={additionalDebtAmount}
-                onChange={(e) => setAdditionalDebtAmount(e.target.value)}
-                placeholder="أدخل مبلغ الدين الجديد..."
-                className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-              />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={handleAddNewDebt}
-                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-xl font-bold shadow-lg transition flex items-center justify-center gap-2"
-              >
-                <PlusCircle className="w-5 h-5" />
-                <span>إضافة للمبلغ الحالي</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-4 py-2 shadow-lg z-40">
-        <div className="flex items-center justify-around max-w-md mx-auto">
-          <button onClick={() => navigate('/')} className="flex flex-col items-center py-2 text-emerald-500">
-            <DollarSign className="w-6 h-6" />
-            <span className="text-xs mt-1 font-medium">{t('home')}</span>
-          </button>
-          <button onClick={() => navigate('/debts')} className="flex flex-col items-center py-2 text-gray-400">
-            <Bell className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('debts')}</span>
-          </button>
-          <button onClick={() => navigate('/debts/add')} className="relative -mt-8">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-xl">
-              <Plus className="w-8 h-8 text-white" />
-            </div>
-          </button>
-          <button onClick={() => navigate('/debts')} className="flex flex-col items-center py-2 text-gray-400">
-            <Users className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('people')}</span>
-          </button>
-          <button onClick={() => navigate('/settings')} className="flex flex-col items-center py-2 text-gray-400">
-            <Settings className="w-6 h-6" />
-            <span className="text-xs mt-1">{t('settings')}</span>
-          </button>
-        </div>
-      </nav>
     </div>
   );
 }
