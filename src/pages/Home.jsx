@@ -158,56 +158,72 @@ export default function Home() {
   };
 
   /**
-   * دالة مستقرة وموحدة لتصدير ومشاركة الـ PDF
-   * تعمل بكفاءة عالية سواء على الويب أو في أندرويد (Capacitor Native Platform)
+   * دالة تصدير مجهزة لحل مشكلة "الصفحة البيضاء"
+   * تصنع نسخة مستقلة باللون الأبيض الصريح لتوليد PDF بدون أخطاء الرسم
    */
   const saveAndExportPDF = async (element, fileName, opt) => {
+    // 1. استنساخ العنصر لحل مشكلة الشفافية والوضع الداكن
+    const clone = element.cloneNode(true);
+    
+    // إزالة أزرار الإجراءات من النسخة المستنسخة في حال تصدير الجدول
+    const actionButtons = clone.querySelectorAll('button');
+    actionButtons.forEach(btn => btn.style.display = 'none');
+
+    // إعطاء خلفية بيضاء صريحة ونصوص واضحة
+    clone.style.background = '#ffffff';
+    clone.style.color = '#000000';
+    clone.style.padding = '20px';
+    clone.style.width = '100%';
+    clone.style.maxWidth = '1000px';
+    clone.style.position = 'absolute';
+    clone.style.left = '-9999px';
+    clone.style.top = '0';
+
+    document.body.appendChild(clone);
+
     try {
-      // إذا لم يكن التطبيق يعزف داخل بيئة نيتف أندرويد/موبايل، يتم التحميل المباشر للويب
+      const customOpt = {
+        ...opt,
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          scrollX: 0,
+          scrollY: 0
+        }
+      };
+
       if (!Capacitor.isNativePlatform()) {
-        await html2pdf().set(opt).from(element).save();
-        return;
+        await html2pdf().set(customOpt).from(clone).save();
+      } else {
+        const pdfBase64 = await html2pdf()
+          .set(customOpt)
+          .from(clone)
+          .outputPdf('datauristring');
+
+        const base64Data = pdfBase64.split(',')[1];
+        const cleanFileName = fileName.replace(/[/\\?%*:|"<>]/g, '_');
+
+        const savedFile = await Filesystem.writeFile({
+          path: cleanFileName,
+          data: base64Data,
+          directory: Directory.Cache
+        });
+
+        await Share.share({
+          title: cleanFileName,
+          text: 'تم استخراج ملف PDF بنجاح',
+          url: savedFile.uri,
+          dialogTitle: 'فتح أو مشاركة ملف PDF'
+        });
       }
-
-      // أندرويد: التأكد من إلحاق العنصر مؤقتاً بالصفحة لرسمه بشكل صحيح بواسطة html2canvas
-      const isTemporary = !document.body.contains(element);
-      if (isTemporary) {
-        element.style.position = 'fixed';
-        element.style.top = '-9999px';
-        element.style.left = '-9999px';
-        document.body.appendChild(element);
-      }
-
-      // استخراج Base64 الخاص بـ PDF
-      const pdfBase64 = await html2pdf()
-        .set(opt)
-        .from(element)
-        .outputPdf('datauristring');
-
-      // إزالة العنصر المكتسب إن وجد
-      if (isTemporary && document.body.contains(element)) {
-        document.body.removeChild(element);
-      }
-
-      const base64Data = pdfBase64.split(',')[1];
-      const cleanFileName = fileName.replace(/[/\\?%*:|"<>]/g, '_');
-
-      // كتابة الملف في مسار الـ Cache المستقر لمنع استئذانات الـ Storage المعقدة في أندرويد
-      const savedFile = await Filesystem.writeFile({
-        path: cleanFileName,
-        data: base64Data,
-        directory: Directory.Cache
-      });
-
-      // فتح شاشة المشاركة الرسمية للنظام
-      await Share.share({
-        title: cleanFileName,
-        text: 'تم استخراج ملف PDF بنجاح',
-        url: savedFile.uri,
-        dialogTitle: 'فتح أو مشاركة ملف PDF'
-      });
     } catch (error) {
       console.error('حدث خطأ أثناء استخراج أو مشاركة الملف:', error);
+    } finally {
+      // إزالة النسخة المؤقتة بعد الانتهاء
+      if (document.body.contains(clone)) {
+        document.body.removeChild(clone);
+      }
     }
   };
 
@@ -219,7 +235,6 @@ export default function Home() {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
     };
 
@@ -315,7 +330,6 @@ export default function Home() {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
@@ -426,7 +440,6 @@ export default function Home() {
       margin: 10,
       filename: fileName,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
 
