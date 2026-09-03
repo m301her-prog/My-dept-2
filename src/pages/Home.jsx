@@ -39,7 +39,7 @@ export default function Home() {
     sendNotification,
     notificationsEnabled,
     updateDebt,
-    loading // حالة التحميل إذا كانت متاحة في Context
+    loading
   } = useApp();
   
   const navigate = useNavigate();
@@ -189,7 +189,38 @@ export default function Home() {
   };
 
   const handleDownloadTablePDF = async () => {
-    const element = document.getElementById('debts-table-container');
+    // توليد عناصر الجدول بالكامل مستقلاً بدلاً من قراءة DOM لتجنب مشاكل الإنتاج (Build)
+    const tableRows = recentDebts.map(debt => `
+      <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
+        <td style="padding: 10px; text-align: center; font-weight: bold;">${debt.personName}</td>
+        <td style="padding: 10px; text-align: center; color: ${debt.type === 'owed_to_me' ? '#059669' : '#dc2626'}; font-weight: bold;">
+          ${formatCurrency(debt.amount, debt.currency)}
+        </td>
+        <td style="padding: 10px; text-align: center;">${debt.installmentsCount || 0}</td>
+        <td style="padding: 10px; text-align: center;">${debt.status === 'paid' ? 'تم السداد' : 'قيد الانتظار'}</td>
+      </tr>
+    `).join('');
+
+    const element = document.createElement('div');
+    element.innerHTML = `
+      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
+        <h2 style="color: #059669; text-align: center; margin-bottom: 20px;">جدول الديون والنشاط الأخير</h2>
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid #d1d5db;">
+          <thead>
+            <tr style="background: #059669; color: #fff; font-size: 13px;">
+              <th style="padding: 10px; text-align: center;">الاسم</th>
+              <th style="padding: 10px; text-align: center;">المبلغ</th>
+              <th style="padding: 10px; text-align: center;">الأقساط</th>
+              <th style="padding: 10px; text-align: center;">الحالة</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
+      </div>
+    `;
+
     const fileName = `جدول_الديون_${new Date().toISOString().slice(0, 10)}.pdf`;
     const opt = {
       margin: 10,
@@ -443,7 +474,6 @@ export default function Home() {
     setSelectedAddDebt(null);
   };
 
-  // شاشة تحميل مؤقتة عند الفتح الأول حتى تجهز البيانات
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col justify-center items-center">
@@ -596,7 +626,7 @@ export default function Home() {
             </button>
           </div>
 
-          <div id="debts-table-container" className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden p-2">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden p-2">
             <div className="overflow-x-auto">
               <table className="w-full text-right text-sm text-gray-700 dark:text-gray-200">
                 <thead className="bg-gray-100 dark:bg-gray-700 text-xs uppercase text-gray-600 dark:text-gray-300">
