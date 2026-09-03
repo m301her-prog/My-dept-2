@@ -158,11 +158,17 @@ export default function Home() {
   };
 
   const saveAndExportPDF = async (element, fileName, opt) => {
+    // 1. في حالة المتصفح العادي
     if (!Capacitor.isNativePlatform()) {
-      html2pdf().set(opt).from(element).save();
+      try {
+        html2pdf().set(opt).from(element).save();
+      } catch (err) {
+        console.error('خطأ تحضير PDF للويب:', err);
+      }
       return;
     }
 
+    // 2. في حالة التطبيقات الذكية (Android / iOS)
     try {
       const pdfBase64 = await html2pdf()
         .set(opt)
@@ -171,25 +177,26 @@ export default function Home() {
 
       const base64Data = pdfBase64.split(',')[1];
 
+      // استخدام Directory.Cache لتسهيل الوصول للأذونات وفتح نافذة المشاركة
       const savedFile = await Filesystem.writeFile({
         path: fileName,
         data: base64Data,
-        directory: Directory.Documents
+        directory: Directory.Cache
       });
 
       await Share.share({
         title: fileName,
-        text: 'تم استخراج ملف PDF بنجاح',
+        text: 'إليك ملف PDF للتقرير المطلوب',
         url: savedFile.uri,
         dialogTitle: 'فتح أو مشاركة ملف PDF'
       });
     } catch (error) {
-      console.error('حدث خطأ أثناء حفظ الملف:', error);
+      console.error('حدث خطأ أثناء حفظ أو مشاركة الملف:', error);
+      alert('تعذر فتح بوابة المشاركة: ' + (error.message || error));
     }
   };
 
   const handleDownloadTablePDF = async () => {
-    // توليد عناصر الجدول بالكامل مستقلاً بدلاً من قراءة DOM لتجنب مشاكل الإنتاج (Build)
     const tableRows = recentDebts.map(debt => `
       <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
         <td style="padding: 10px; text-align: center; font-weight: bold;">${debt.personName}</td>
@@ -234,99 +241,103 @@ export default function Home() {
   };
 
   const handlePrintCheckPDF = async (debt) => {
-    const history = debt.history || [];
-    const installments = history.filter(h => h.type === 'installment' || h.type === 'payment');
+    try {
+      const history = debt.history || [];
+      const installments = history.filter(h => h.type === 'installment' || h.type === 'payment');
 
-    const historyRows = history.length > 0 ? history.map((item, index) => `
-      <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
-        <td style="padding: 8px; text-align: center;">${index + 1}</td>
-        <td style="padding: 8px; text-align: center;">${formatDate(item.date || new Date())}</td>
-        <td style="padding: 8px; text-align: center; color: ${item.type === 'add' ? '#dc2626' : '#16a34a'}; font-weight: bold;">
-          ${item.type === 'add' ? 'إضافة دين (+)' : 'سداد قسط (-)'}
-        </td>
-        <td style="padding: 8px; text-align: center; font-weight: bold;">
-          ${formatCurrency(item.amount, debt.currency)}
-        </td>
-        <td style="padding: 8px; text-align: center;">${item.note || '-'}</td>
-      </tr>
-    `).join('') : `
-      <tr>
-        <td colspan="5" style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">لا توجد حركة أقساط سابقة سجلت لهذا الدين</td>
-      </tr>
-    `;
+      const historyRows = history.length > 0 ? history.map((item, index) => `
+        <tr style="border-bottom: 1px solid #e5e7eb; font-size: 13px;">
+          <td style="padding: 8px; text-align: center;">${index + 1}</td>
+          <td style="padding: 8px; text-align: center;">${formatDate(item.date || new Date())}</td>
+          <td style="padding: 8px; text-align: center; color: ${item.type === 'add' ? '#dc2626' : '#16a34a'}; font-weight: bold;">
+            ${item.type === 'add' ? 'إضافة دين (+)' : 'سداد قسط (-)'}
+          </td>
+          <td style="padding: 8px; text-align: center; font-weight: bold;">
+            ${formatCurrency(item.amount, debt.currency)}
+          </td>
+          <td style="padding: 8px; text-align: center;">${item.note || '-'}</td>
+        </tr>
+      `).join('') : `
+        <tr>
+          <td colspan="5" style="padding: 12px; text-align: center; color: #6b7280; font-size: 13px;">لا توجد حركة أقساط سابقة سجلت لهذا الدين</td>
+        </tr>
+      `;
 
-    const checkElement = document.createElement('div');
-    checkElement.innerHTML = `
-      <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
-        <div style="border: 3px solid #059669; padding: 25px; border-radius: 15px; background: #f0fdf4; max-width: 750px; margin: auto;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 20px;">
-            <div>
-              <h2 style="color: #059669; margin: 0; font-size: 22px;">شيك إثبات وسجل دين</h2>
-              <span style="font-size: 12px; color: #666;">كشف حساب تفصيلي للشخص</span>
+      const checkElement = document.createElement('div');
+      checkElement.innerHTML = `
+        <div style="padding: 20px; font-family: sans-serif; direction: rtl; text-align: right; background: #fff;">
+          <div style="border: 3px solid #059669; padding: 25px; border-radius: 15px; background: #f0fdf4; max-width: 750px; margin: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #059669; padding-bottom: 12px; margin-bottom: 20px;">
+              <div>
+                <h2 style="color: #059669; margin: 0; font-size: 22px;">شيك إثبات وسجل دين</h2>
+                <span style="font-size: 12px; color: #666;">كشف حساب تفصيلي للشخص</span>
+              </div>
+              <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #059669;">تاريخ التقرير: ${formatDate(new Date())}</span>
             </div>
-            <span style="font-size: 13px; color: #333; background: #fff; padding: 4px 10px; border-radius: 6px; border: 1px solid #059669;">تاريخ التقرير: ${formatDate(new Date())}</span>
-          </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; background: #fff; padding: 15px; border-radius: 10px; border: 1px solid #e5e7eb;">
-            <div style="font-size: 15px;">
-              <span style="color: #555;">الاسم / الطرف الثاني: </span><strong style="color: #111;">${debt.personName}</strong>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; background: #fff; padding: 15px; border-radius: 10px; border: 1px solid #e5e7eb;">
+              <div style="font-size: 15px;">
+                <span style="color: #555;">الاسم / الطرف الثاني: </span><strong style="color: #111;">${debt.personName}</strong>
+              </div>
+              <div style="font-size: 15px;">
+                <span style="color: #555;">نوع الدين: </span><strong>${debt.type === 'owed_to_me' ? 'مستحق لي (له)' : 'مستحق علي (عليه)'}</strong>
+              </div>
+              <div style="font-size: 15px;">
+                <span style="color: #555;">تاريخ الاستحقاق: </span><strong>${formatDate(debt.dueDate)}</strong>
+              </div>
+              <div style="font-size: 15px;">
+                <span style="color: #555;">الحالة الحالية: </span><strong style="color: ${debt.status === 'paid' ? '#16a34a' : '#d97706'};">${debt.status === 'paid' ? 'تم السداد بالكامل' : 'متبقي'}</strong>
+              </div>
             </div>
-            <div style="font-size: 15px;">
-              <span style="color: #555;">نوع الدين: </span><strong>${debt.type === 'owed_to_me' ? 'مستحق لي (له)' : 'مستحق علي (عليه)'}</strong>
-            </div>
-            <div style="font-size: 15px;">
-              <span style="color: #555;">تاريخ الاستحقاق: </span><strong>${formatDate(debt.dueDate)}</strong>
-            </div>
-            <div style="font-size: 15px;">
-              <span style="color: #555;">الحالة الحالية: </span><strong style="color: ${debt.status === 'paid' ? '#16a34a' : '#d97706'};">${debt.status === 'paid' ? 'تم السداد بالكامل' : 'متبقي'}</strong>
-            </div>
-          </div>
 
-          <div style="margin-bottom: 20px; background: #e6f4ea; padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #a7f3d0;">
-            <div>
-              <div style="font-size: 13px; color: #047857;">المبلغ الحالي / المتبقي للدفعة:</div>
-              <div style="font-size: 22px; font-weight: bold; color: #065f46;">${formatCurrency(debt.amount, debt.currency)}</div>
+            <div style="margin-bottom: 20px; background: #e6f4ea; padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #a7f3d0;">
+              <div>
+                <div style="font-size: 13px; color: #047857;">المبلغ الحالي / المتبقي للدفعة:</div>
+                <div style="font-size: 22px; font-weight: bold; color: #065f46;">${formatCurrency(debt.amount, debt.currency)}</div>
+              </div>
+              <div style="text-align: left;">
+                <div style="font-size: 13px; color: #047857;">عدد الأقساط المسددة:</div>
+                <div style="font-size: 18px; font-weight: bold; color: #065f46;">${installments.length}</div>
+              </div>
             </div>
-            <div style="text-align: left;">
-              <div style="font-size: 13px; color: #047857;">عدد الأقساط المسددة:</div>
-              <div style="font-size: 18px; font-weight: bold; color: #065f46;">${installments.length}</div>
+
+            <h3 style="font-size: 16px; color: #059669; margin-bottom: 10px;">جدول الأقساط والتحركات (السجل)</h3>
+            <table style="width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 20px; border: 1px solid #d1d5db;">
+              <thead>
+                <tr style="background: #059669; color: #fff; font-size: 13px;">
+                  <th style="padding: 8px; text-align: center;">#</th>
+                  <th style="padding: 8px; text-align: center;">التاريخ</th>
+                  <th style="padding: 8px; text-align: center;">نوع العملية</th>
+                  <th style="padding: 8px; text-align: center;">المبلغ</th>
+                  <th style="padding: 8px; text-align: center;">ملاحظات</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${historyRows}
+              </tbody>
+            </table>
+
+            <div style="display: flex; justify-content: space-between; margin-top: 30px; border-top: 1px dashed #059669; padding-top: 15px;">
+              <p style="margin: 0; font-size: 14px;">توقيع المحرر: ...................</p>
+              <p style="margin: 0; font-size: 14px;">توقيع المستلم: ...................</p>
             </div>
-          </div>
-
-          <h3 style="font-size: 16px; color: #059669; margin-bottom: 10px;">جدول الأقساط والتحركات (السجل)</h3>
-          <table style="width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 20px; border: 1px solid #d1d5db;">
-            <thead>
-              <tr style="background: #059669; color: #fff; font-size: 13px;">
-                <th style="padding: 8px; text-align: center;">#</th>
-                <th style="padding: 8px; text-align: center;">التاريخ</th>
-                <th style="padding: 8px; text-align: center;">نوع العملية</th>
-                <th style="padding: 8px; text-align: center;">المبلغ</th>
-                <th style="padding: 8px; text-align: center;">ملاحظات</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${historyRows}
-            </tbody>
-          </table>
-
-          <div style="display: flex; justify-content: space-between; margin-top: 30px; border-top: 1px dashed #059669; padding-top: 15px;">
-            <p style="margin: 0; font-size: 14px;">توقيع المحرر: ...................</p>
-            <p style="margin: 0; font-size: 14px;">توقيع المستلم: ...................</p>
           </div>
         </div>
-      </div>
-    `;
+      `;
 
-    const fileName = `شيك_دين_${debt.personName}.pdf`;
-    const opt = {
-      margin: 10,
-      filename: fileName,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    };
+      const fileName = `شيك_دين_${debt.personName || 'عميل'}.pdf`;
+      const opt = {
+        margin: 10,
+        filename: fileName,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2 },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
 
-    await saveAndExportPDF(checkElement, fileName, opt);
+      await saveAndExportPDF(checkElement, fileName, opt);
+    } catch (e) {
+      console.error('خطأ تنفيذي داخل handlePrintCheckPDF:', e);
+    }
   };
 
   const handlePayInstallment = async () => {
