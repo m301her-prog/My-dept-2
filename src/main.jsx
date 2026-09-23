@@ -6,6 +6,14 @@ import { AppProvider, useApp } from './context/AppContext.jsx';
 import './index.css';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((error) => {
+      console.error('فشل تسجيل تطبيق سطح المكتب:', error);
+    });
+  });
+}
+
 // مكون لإدارة أذونات وجدولة الإشعارات المحلية
 const NotificationInitializer = () => {
   const { debts } = useApp();
