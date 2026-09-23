@@ -9,6 +9,7 @@ import DebtStatistics from './pages/DebtStatistics.jsx';
 import Settings from './pages/Settings.jsx';
 import Admin from './pages/Admin.jsx';
 import Notification from './components/Notification.jsx';
+import DesktopDownloadButton from './components/DesktopDownloadButton.jsx';
 
 /**
  * Protected Route Component
@@ -68,6 +69,7 @@ export default function App() {
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-300">
         {/* Global Notification Component */}
         <Notification />
+        <DesktopDownloadButton />
 
         {/* Application Routes */}
         <Routes>

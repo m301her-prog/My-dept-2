@@ -193,6 +193,8 @@ export const translations = {
 
     // Additional
     appName: 'مدير الديون',
+    downloadDesktop: 'تحميل نسخة سطح المكتب',
+    downloadDesktopHint: 'فتح صفحة تنزيل أحدث إصدار',
     quickActions: 'إجراءات سريعة',
     upcomingPayments: 'المدفوعات القادمة',
     results: 'نتائج',
@@ -395,6 +397,8 @@ export const translations = {
     termsOfService: 'Conditions',
     madeWithLove: 'Fait avec',
     appName: 'Gestionnaire de Dettes',
+    downloadDesktop: 'Télécharger la version bureau',
+    downloadDesktopHint: 'Ouvrir la page de téléchargement de la dernière version',
     quickActions: 'Actions rapides',
     upcomingPayments: 'Paiements à venir',
     results: 'résultats',
@@ -597,6 +601,8 @@ export const translations = {
     termsOfService: 'Terms',
     madeWithLove: 'Made with',
     appName: 'Debts Manager',
+    downloadDesktop: 'Download desktop version',
+    downloadDesktopHint: 'Open the latest release download page',
     quickActions: 'Quick Actions',
     upcomingPayments: 'Upcoming Payments',
     results: 'results',
